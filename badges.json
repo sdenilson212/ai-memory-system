@@ -1,0 +1,29 @@
+{
+  "badges": [
+    {
+      "name": "License",
+      "url": "https://img.shields.io/badge/license-MIT-blue.svg",
+      "link": "LICENSE"
+    },
+    {
+      "name": "Python",
+      "url": "https://img.shields.io/badge/python-3.10%2B-brightgreen.svg",
+      "link": "https://www.python.org/downloads/"
+    },
+    {
+      "name": "Platform",
+      "url": "https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg",
+      "link": ""
+    },
+    {
+      "name": "Status",
+      "url": "https://img.shields.io/badge/status-stable-success.svg",
+      "link": ""
+    },
+    {
+      "name": "MCP",
+      "url": "https://img.shields.io/badge/MCP-Model%20Context%20Protocol-orange.svg",
+      "link": "engine/MCP_GUIDE.md"
+    }
+  ]
+}

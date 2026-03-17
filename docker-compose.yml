@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  memory-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-memory-engine
+    ports:
+      - "8765:8765"         # FastAPI REST API
+    volumes:
+      - memory_data:/data   # persistent memory storage
+    environment:
+      - MEMORY_DIR=/data/memory-bank
+      - API_HOST=0.0.0.0
+      - API_PORT=8765
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: standalone UI dev server (only needed for local development)
+  # Comment out in production — UI is served by the engine container above.
+  memory-ui:
+    image: node:20-alpine
+    container_name: ai-memory-ui
+    working_dir: /app
+    command: sh -c "npm ci && npm run dev"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./ui:/app
+    environment:
+      - VITE_API_BASE=http://localhost:8765
+    profiles:
+      - dev                 # only starts with: docker compose --profile dev up
+    depends_on:
+      - memory-engine
+
+volumes:
+  memory_data:
+    driver: local

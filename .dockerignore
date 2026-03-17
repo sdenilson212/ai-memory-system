@@ -1,0 +1,13 @@
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+engine/memory-bank/
+engine/secure/
+engine/static/
+ui/node_modules/
+ui/dist/
+.git
+.gitignore
+*.zip
+*.log
