@@ -263,3 +263,55 @@ GET /memory/recall?query=fastapi&layer=all
   │
   └─ 合并 + 按相关性排序 → 返回结果列表
 ```
+
+---
+
+## 🔄 扩展模块 (v1.1+)
+
+### 向量检索 `core/vector_store.py`
+
+基于 ChromaDB + sentence-transformers，提供语义搜索能力：
+
+```python
+vs = VectorStore(Path("memory-bank/vector_store"))
+vs.add(entry_id="mem_001", content="用户喜欢简洁代码")
+results = vs.search("代码风格偏好", top_k=3)
+```
+
+### 自动去重 `core/deduplicator.py`
+
+检测相似内容，避免重复记忆：
+
+```python
+dedup = Deduplicator(similarity_threshold=0.85)
+action = dedup.suggest_action(new_content, existing_contents)
+# 返回: "save" | "merge" | "skip"
+```
+
+### 记忆权重 `core/weight.py`
+
+重要性评分，影响检索排序：
+
+```python
+weight = MemoryWeight()
+weight.set_weight("mem_001", MemoryWeight.HIGH)
+ranked = weight.rank_results(results, boost_recent=True)
+```
+
+### 备份恢复 `backup_restore.py`
+
+自动化备份和一键恢复：
+
+```python
+backup_path = backup("./memory-bank")
+restore(backup_path, "./memory-bank")
+```
+
+---
+
+## 📊 版本历史
+
+| 版本 | 日期 | 更新内容 |
+|------|------|----------|
+| 1.0 | 2026-03-16 | 初始版本：LTM + KB + STM + MCP |
+| 1.1 | 2026-03-17 | 新增：向量检索、去重、权重、备份恢复 |
