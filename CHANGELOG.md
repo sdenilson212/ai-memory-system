@@ -118,6 +118,41 @@
 
 ---
 
+## [1.3.0] - 2026-03-23
+
+### 新增 / Added
+
+#### 自适应 Skill 系统（Adaptive Skill System）
+- ✅ **三层递进机制** — Layer 1 直接调用 KB / Layer 2 组合 LTM / Layer 3 自动生成
+- ✅ **Layer 2 组合引擎** (`engine/skill_composer.py`) — 从 LTM 搜索并组合出新 Skill
+- ✅ **Layer 3 生成引擎** (`engine/skill_generator.py`) — 支持模板法、类比法、分解法、混合法四种生成策略
+- ✅ **质量评估引擎** (`engine/quality_evaluator.py`) — 7 维度评分（完整性/清晰度/可行性/证据支持/泛化性/新颖性/风险缓解），通过阈值 ≥ 0.70 自动审批
+- ✅ **系统集成** (`engine/adaptive_skill_system.py`) — Layer 1/2/3 完整数据流打通
+
+#### AI 员工记忆体系
+- ✅ **员工专属记忆标签** — 每位员工拥有独立的成长记录（`engine/memory-bank/employees/`）
+- ✅ **员工成长积分系统** — 每次任务完成自动追加成长日志（`growth-logs/`）
+- ✅ **员工会话启动协议** — 激活时自动 `kb_search` 历史经验，静默参考提升输出质量
+
+#### 架构文档
+- ✅ `ADAPTIVE_SKILL_SYSTEM.md` — 2000+ 行完整架构设计
+- ✅ `IMPLEMENTATION_GUIDE.md` — 1200+ 行详细实现指南
+- ✅ `DEEPENING_SUMMARY.md` — 阶段深化总结
+- ✅ `DIRECTION_1_VERIFICATION_REPORT.md` — 方向验证报告
+
+### 改进 / Improved
+- 完善 `engine/core/deduplicator.py`，实现完整去重逻辑（相似度阈值 85%）
+- 完善 `engine/core/vector_store.py`，实现轻量级向量存储（无需 ChromaDB 依赖）
+- 完善 `engine/backup_restore.py`，完整备份管理器（增量/全量/自动调度）
+- 更新 `README.md`，补充自适应 Skill 系统说明和员工记忆体系介绍
+
+### 技术实现
+- Python 3.10+，纯 OOP 设计，模块化高度可测试
+- 自适应 Skill 系统：`skill_composer.py`（400+ 行）+ `skill_generator.py`（500+ 行）+ `quality_evaluator.py`（450+ 行）
+- 总新增代码量：2000+ 行
+
+---
+
 ## [未来计划 / Future Plans]
 
 ### 1.3.0 - 计划中
@@ -146,4 +181,4 @@
 
 ---
 
-*最后更新: 2026-03-17 | v1.2.0*
+*最后更新: 2026-03-23 | v1.3.0*
