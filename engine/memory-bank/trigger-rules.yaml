@@ -1,0 +1,67 @@
+# trigger-rules.yaml — 自定义触发规则示例
+# 放在 engine/memory-bank/ 下，加载方法：
+#   engine = TriggerEngine()
+#   engine.load_rules("memory-bank/trigger-rules.yaml")
+
+ltm_rules:
+  # 工作相关
+  - pattern: "我的工作涉及"
+    category: project
+    confidence: 0.85
+    reason: "项目背景信息"
+    tags: [工作]
+
+  - pattern: "当前在做的项目是"
+    category: project
+    confidence: 0.90
+    reason: "明确项目标识"
+    tags: [项目]
+
+  # 偏好类
+  - pattern: "我的风格是"
+    category: preference
+    confidence: 0.88
+    reason: "风格偏好"
+    tags: [偏好, 风格]
+
+  # 健康/运动
+  - pattern: "我每周跑"
+    category: habit
+    confidence: 0.85
+    reason: "运动习惯"
+    tags: [运动, 习惯]
+
+  - pattern: "我的PB是"
+    category: decision
+    confidence: 0.80
+    reason: "跑步成绩记录"
+    tags: [跑步, 成绩]
+
+  # 技术偏好
+  - pattern: "我更倾向于用"
+    category: preference
+    confidence: 0.87
+    reason: "技术选型偏好"
+    tags: [技术, 偏好]
+
+
+kb_rules:
+  # 技术术语
+  - pattern: "API 是指"
+    category: technical
+    confidence: 0.80
+    reason: "技术术语定义"
+    tags: [术语, API]
+
+  - pattern: "这个框架的原理是"
+    category: technical
+    confidence: 0.78
+    reason: "框架原理说明"
+    tags: [技术, 原理]
+
+  # 操作步骤
+  - pattern: "第一步："
+    category: howto
+    confidence: 0.75
+    reason: "分步操作"
+    tags: [教程, 步骤]
