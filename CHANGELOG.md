@@ -7,6 +7,34 @@
 
 ---
 
+## [1.3.0] - 2026-03-25
+
+### 修复 / Fixed
+
+#### 并发安全
+- ✅ 集成 `filelock`（v3.13+）对每个记忆分片文件加读写锁，防止多客户端同时读写丢数据
+- ✅ 未安装 `filelock` 时自动降级为 `_NullLock`（单进程场景安全），不影响启动
+- ✅ `requirements.txt` 新增 `filelock>=3.13.0` 依赖
+
+#### 存储分片（解决单文件天花板）
+- ✅ LTM 存储从单文件拆分为按 category 分片（`long-term-memory-preference.md` 等 7 个分片）
+- ✅ `save()` / `search()` 有 category 时只操作目标分片，全量操作才扫描所有分片
+- ✅ `update()` 支持 category 变更时跨分片迁移
+- ✅ 旧版 `long-term-memory.md` 首次启动时自动迁移到分片，迁移完成后重命名为 `.migrated.md`
+
+#### Passphrase 管理
+- ✅ `Encryptor.get_passphrase()` 静态方法：优先级 显式传入 > 环境变量 `MEMORY_PASSPHRASE` > 降级脱敏存储
+- ✅ `ltm.save()` 自动调用，无需每次手动传 passphrase
+- ✅ 文档补充设置示例（Windows/Linux/Mac/.env 文件）
+
+#### Trigger 规则文档
+- ✅ `trigger.py` 顶部新增完整触发规则参考表（LTM 规则 + KB 规则 + 置信度说明 + 扩展方法）
+- ✅ 新增 `analyze_text(text)` 接口说明
+
+---
+
+## [1.2.0] - 2026-03-17
+
 ## [1.0.0] - 2026-03-17
 
 ### 新增 / Added
@@ -120,36 +148,21 @@
 
 ## [1.3.0] - 2026-03-23
 
-### 新增 / Added
-
-#### 自适应 Skill 系统（Adaptive Skill System）
-- ✅ **三层递进机制** — Layer 1 直接调用 KB / Layer 2 组合 LTM / Layer 3 自动生成
-- ✅ **Layer 2 组合引擎** (`engine/skill_composer.py`) — 从 LTM 搜索并组合出新 Skill
-- ✅ **Layer 3 生成引擎** (`engine/skill_generator.py`) — 支持模板法、类比法、分解法、混合法四种生成策略
-- ✅ **质量评估引擎** (`engine/quality_evaluator.py`) — 7 维度评分（完整性/清晰度/可行性/证据支持/泛化性/新颖性/风险缓解），通过阈值 ≥ 0.70 自动审批
-- ✅ **系统集成** (`engine/adaptive_skill_system.py`) — Layer 1/2/3 完整数据流打通
-
-#### AI 员工记忆体系
-- ✅ **员工专属记忆标签** — 每位员工拥有独立的成长记录（`engine/memory-bank/employees/`）
-- ✅ **员工成长积分系统** — 每次任务完成自动追加成长日志（`growth-logs/`）
-- ✅ **员工会话启动协议** — 激活时自动 `kb_search` 历史经验，静默参考提升输出质量
-
-#### 架构文档
-- ✅ `ADAPTIVE_SKILL_SYSTEM.md` — 2000+ 行完整架构设计
-- ✅ `IMPLEMENTATION_GUIDE.md` — 1200+ 行详细实现指南
-- ✅ `DEEPENING_SUMMARY.md` — 阶段深化总结
-- ✅ `DIRECTION_1_VERIFICATION_REPORT.md` — 方向验证报告
-
 ### 改进 / Improved
-- 完善 `engine/core/deduplicator.py`，实现完整去重逻辑（相似度阈值 85%）
-- 完善 `engine/core/vector_store.py`，实现轻量级向量存储（无需 ChromaDB 依赖）
-- 完善 `engine/backup_restore.py`，完整备份管理器（增量/全量/自动调度）
-- 更新 `README.md`，补充自适应 Skill 系统说明和员工记忆体系介绍
 
-### 技术实现
-- Python 3.10+，纯 OOP 设计，模块化高度可测试
-- 自适应 Skill 系统：`skill_composer.py`（400+ 行）+ `skill_generator.py`（500+ 行）+ `quality_evaluator.py`（450+ 行）
-- 总新增代码量：2000+ 行
+#### 核心模块完善
+- ✅ **`engine/core/deduplicator.py`** — 完整去重逻辑，基于文本相似度（阈值 85%）自动检测并跳过重复记忆
+- ✅ **`engine/core/vector_store.py`** — 轻量级向量存储，纯 Python 实现，无需 ChromaDB 等外部依赖
+- ✅ **`engine/backup_restore.py`** — 完整备份管理器，支持增量备份、全量备份、自动调度与一键恢复
+
+### 问题修复 / Fixed
+- 修复 `deduplicator.py` 仅有接口无实现的问题
+- 修复 `vector_store.py` 缺少实际存储逻辑的问题
+- 修复 `backup_restore.py` 备份恢复流程不完整的问题
+
+### 文档更新 / Docs
+- 更新 `README.md`，补充 v1.3.0 核心模块说明
+- 更新 `CHANGELOG.md`
 
 ---
 

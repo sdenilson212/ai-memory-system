@@ -38,6 +38,16 @@ import frontmatter
 from security.detector import SensitiveDetector
 from security.encryptor import Encryptor
 
+# ── 并发安全：文件锁 ──────────────────────────────────────────────────────────
+# 使用 filelock 保证多进程/多客户端同时读写时不丢数据。
+# 如果 filelock 未安装，降级为无锁（单进程场景安全）。
+try:
+    from filelock import FileLock as _FileLock
+    _FILELOCK_AVAILABLE = True
+except ImportError:
+    _FileLock = None  # type: ignore
+    _FILELOCK_AVAILABLE = False
+
 # BM25 is optional — graceful fallback to keyword scoring if not installed
 try:
     from rank_bm25 import BM25Okapi as _BM25Okapi
@@ -99,11 +109,23 @@ class LTMError(Exception):
 
 class LTMManager:
     """
-    Manages persistent long-term memory stored in a Markdown file.
-    管理以 Markdown 文件存储的长期记忆。
+    Manages persistent long-term memory stored in sharded Markdown files.
+    管理以 Markdown 文件分片存储的长期记忆。
 
-    The file format uses YAML front matter for metadata and Markdown body
-    for human-readable content.
+    存储策略（分片）：
+        每个 category 对应一个独立文件，避免单文件无限增长：
+            long-term-memory-profile.md
+            long-term-memory-preference.md
+            long-term-memory-project.md
+            long-term-memory-decision.md
+            long-term-memory-habit.md
+            long-term-memory-credential.md
+            long-term-memory-other.md
+        兼容旧版单文件 long-term-memory.md（自动迁移）。
+
+    并发安全：
+        使用 filelock（如已安装）对每个分片文件加写锁，防止多进程同时写入导致数据丢失。
+        未安装 filelock 时降级为无锁（单进程场景安全）。
 
     Usage / 使用示例:
         ltm = LTMManager(Path("memory-bank"))
@@ -119,7 +141,9 @@ class LTMManager:
         profile = ltm.load_profile()
     """
 
-    _LTM_FILENAME = "long-term-memory.md"
+    _LTM_FILENAME = "long-term-memory.md"          # 旧版兼容文件
+    _SHARD_PREFIX = "long-term-memory-"             # 分片文件前缀
+    _SHARD_SUFFIX = ".md"
 
     def __init__(
         self,
@@ -129,19 +153,74 @@ class LTMManager:
     ) -> None:
         """
         Args:
-            memory_dir: 记忆库根目录（包含 long-term-memory.md）。
+            memory_dir: 记忆库根目录。
             encryptor:  加密器实例，处理敏感条目。不传则自动初始化。
             detector:   敏感信息检测器。不传则自动初始化。
         Raises:
             OSError: 如果目录无法创建。
         """
         self._memory_dir = Path(memory_dir)
-        self._ltm_path = self._memory_dir / self._LTM_FILENAME
+        self._ltm_path = self._memory_dir / self._LTM_FILENAME  # 兼容旧文件
         self._memory_dir.mkdir(parents=True, exist_ok=True)
 
         secure_dir = self._memory_dir / "secure"
         self._encryptor = encryptor or Encryptor(secure_dir)
         self._detector  = detector or SensitiveDetector()
+
+        # 首次初始化时，将旧版单文件数据迁移到分片
+        self._migrate_legacy_file()
+
+    # ── 分片路径工具 ──────────────────────────────────────────────────────────
+
+    def _shard_path(self, category: str) -> Path:
+        """返回指定 category 对应的分片文件路径。"""
+        safe_cat = re.sub(r"[^\w-]", "_", category)  # 防止路径注入
+        return self._memory_dir / f"{self._SHARD_PREFIX}{safe_cat}{self._SHARD_SUFFIX}"
+
+    def _lock_for(self, path: Path):
+        """返回指定文件的锁（contextmanager）。无 filelock 时返回空上下文。"""
+        if _FILELOCK_AVAILABLE:
+            return _FileLock(str(path) + ".lock", timeout=10)
+        return _NullLock()
+
+    def _migrate_legacy_file(self) -> None:
+        """
+        将旧版 long-term-memory.md 中的条目迁移到对应分片文件。
+        迁移完成后重命名旧文件为 long-term-memory.migrated.md，避免重复迁移。
+        """
+        if not self._ltm_path.exists():
+            return
+        migrated_path = self._memory_dir / "long-term-memory.migrated.md"
+        if migrated_path.exists():
+            return  # 已迁移过
+
+        try:
+            post = frontmatter.load(str(self._ltm_path))
+            raw_entries = post.metadata.get("entries", [])
+            if not isinstance(raw_entries, list) or not raw_entries:
+                self._ltm_path.rename(migrated_path)
+                return
+
+            # 按 category 分组写入分片
+            from collections import defaultdict
+            by_cat: dict[str, list] = defaultdict(list)
+            for e in raw_entries:
+                if isinstance(e, dict):
+                    by_cat[e.get("category", "other")].append(e)
+
+            for cat, entries in by_cat.items():
+                existing = self._load_shard(cat)
+                existing_ids = {e.id for e in existing}
+                new_entries = [
+                    _dict_to_entry(e) for e in entries
+                    if e.get("id") not in existing_ids
+                ]
+                if new_entries:
+                    self._save_shard(cat, existing + new_entries)
+
+            self._ltm_path.rename(migrated_path)
+        except Exception:
+            pass  # 迁移失败不影响正常使用
 
     # ── Public Interface ──────────────────────────────────────────────────────
 
@@ -182,18 +261,21 @@ class LTMManager:
         if sensitive is None:
             sensitive = self._detector.is_sensitive(content)
 
+        # passphrase 优先级：显式传入 > 环境变量 MEMORY_PASSPHRASE > None（降级脱敏存储）
+        resolved_passphrase = Encryptor.get_passphrase(explicit=passphrase)
+
         encrypted_ref = None
         stored_content = content
 
         if sensitive:
-            if not passphrase:
+            if not resolved_passphrase:
                 # 敏感但没有提供 passphrase：存脱敏版本
                 stored_content = self._detector.redact(content)
             else:
                 encrypted_ref = self._encryptor.encrypt(
                     key=f"ltm_{uuid.uuid4().hex[:8]}",
                     plaintext=content,
-                    passphrase=passphrase,
+                    passphrase=resolved_passphrase,
                     category=category,
                 )
                 stored_content = self._detector.redact(content)
@@ -210,9 +292,10 @@ class LTMManager:
             encrypted_ref=encrypted_ref,
         )
 
-        entries = self._load_entries()
+        # 分片优化：只加载/保存目标 category 的分片
+        entries = self._load_shard(category)
         entries.append(entry)
-        self._save_entries(entries)
+        self._save_shard(category, entries)
 
         return entry
 
@@ -253,8 +336,9 @@ class LTMManager:
         if not query or not query.strip():
             return self.list_all(category=category)
 
-        all_entries = self._load_entries()
-        pool = [e for e in all_entries if not category or e.category == category]
+        # 分片优化：有 category 时只扫描对应分片，没有时全量
+        all_entries = self._load_shard(category) if category else self._load_entries()
+        pool = all_entries
         if not pool:
             return []
 
@@ -320,6 +404,7 @@ class LTMManager:
             raise LTMError(f"Entry '{entry_id}' not found.")
 
         entry = entries[idx]
+        old_category = entry.category
         if content is not None:
             entry.content = content
         if tags is not None:
@@ -330,8 +415,17 @@ class LTMManager:
             entry.category = category
         entry.updated_at = _now_iso()
 
-        entries[idx] = entry
-        self._save_entries(entries)
+        if old_category != entry.category:
+            # category 变了：从旧分片删除，写入新分片
+            old_shard = self._load_shard(old_category)
+            self._save_shard(old_category, [e for e in old_shard if e.id != entry_id])
+            new_shard = self._load_shard(entry.category)
+            new_shard.append(entry)
+            self._save_shard(entry.category, new_shard)
+        else:
+            entries[idx] = entry
+            self._save_shard(old_category, [e if e.id != entry_id else entry for e in self._load_shard(old_category)])
+
         return entry
 
     def delete(self, entry_id: str, confirm: bool = False) -> bool:
@@ -355,14 +449,26 @@ class LTMManager:
                 "This is a safety guard to prevent accidental deletion."
             )
 
-        entries = self._load_entries()
-        original_len = len(entries)
-        entries = [e for e in entries if e.id != entry_id]
+        # 先在全量中找到条目，确定它属于哪个 category 分片
+        target: Optional[LTMEntry] = None
+        for cat in VALID_CATEGORIES:
+            shard = self._load_shard(cat)
+            for e in shard:
+                if e.id == entry_id:
+                    target = e
+                    break
+            if target:
+                break
 
-        if len(entries) == original_len:
+        if target is None:
             return False
 
-        self._save_entries(entries)
+        shard = self._load_shard(target.category)
+        new_shard = [e for e in shard if e.id != entry_id]
+        if len(new_shard) == len(shard):
+            return False
+
+        self._save_shard(target.category, new_shard)
         return True
 
     def load_profile(self) -> dict:
@@ -415,12 +521,32 @@ class LTMManager:
 
     # ── Private Helpers ───────────────────────────────────────────────────────
 
-    def _load_entries(self) -> list[LTMEntry]:
-        """Load all entries from long-term-memory.md."""
-        if not self._ltm_path.exists():
+    def _load_entries(self, category: Optional[str] = None) -> list[LTMEntry]:
+        """
+        Load entries from shard file(s).
+        从分片文件加载条目。
+
+        Args:
+            category: 如果指定，只加载该分类的分片（快速）；
+                      如果为 None，加载所有分片（全量扫描）。
+        """
+        if category:
+            return self._load_shard(category)
+
+        # 全量：遍历所有已知 category 的分片
+        all_entries: list[LTMEntry] = []
+        for cat in VALID_CATEGORIES:
+            all_entries.extend(self._load_shard(cat))
+        return all_entries
+
+    def _load_shard(self, category: str) -> list[LTMEntry]:
+        """从指定 category 的分片文件加载条目（加读锁）。"""
+        path = self._shard_path(category)
+        if not path.exists():
             return []
         try:
-            post = frontmatter.load(str(self._ltm_path))
+            with self._lock_for(path):
+                post = frontmatter.load(str(path))
             raw_entries = post.metadata.get("entries", [])
             if not isinstance(raw_entries, list):
                 return []
@@ -429,30 +555,40 @@ class LTMManager:
             return []
 
     def _save_entries(self, entries: list[LTMEntry]) -> None:
-        """Persist all entries to long-term-memory.md."""
+        """
+        Persist entries to shard file(s).
+        按 category 分组，写入各自的分片文件。
+        """
+        from collections import defaultdict
+        by_cat: dict[str, list[LTMEntry]] = defaultdict(list)
+        for e in entries:
+            by_cat[e.category].append(e)
+
+        # 清空不再包含任何条目的分片（避免孤儿文件残留）
+        for cat in VALID_CATEGORIES:
+            if cat not in by_cat:
+                path = self._shard_path(cat)
+                if path.exists():
+                    self._save_shard(cat, [])
+
+        for cat, cat_entries in by_cat.items():
+            self._save_shard(cat, cat_entries)
+
+    def _save_shard(self, category: str, entries: list[LTMEntry]) -> None:
+        """将指定 category 的条目写入对应分片文件（加写锁）。"""
+        path = self._shard_path(category)
         try:
-            # 保留现有的 Markdown 正文（如有）
-            body = ""
-            if self._ltm_path.exists():
-                try:
-                    post = frontmatter.load(str(self._ltm_path))
-                    body = post.content or ""
-                except Exception:
-                    pass
-
-            metadata = {
-                "entries": [asdict(e) for e in entries],
-                "last_updated": _now_iso(),
-                "entry_count": len(entries),
-            }
-
-            post = frontmatter.Post(body, **metadata)
-            self._ltm_path.write_text(
-                frontmatter.dumps(post),
-                encoding="utf-8",
-            )
+            with self._lock_for(path):
+                metadata = {
+                    "category": category,
+                    "entries": [asdict(e) for e in entries],
+                    "last_updated": _now_iso(),
+                    "entry_count": len(entries),
+                }
+                post = frontmatter.Post("", **metadata)
+                path.write_text(frontmatter.dumps(post), encoding="utf-8")
         except OSError as exc:
-            raise LTMError(f"Failed to save long-term memory: {exc}") from exc
+            raise LTMError(f"Failed to save shard '{category}': {exc}") from exc
 
     def _relevance_score(self, entry: LTMEntry, query_lower: str) -> int:
         """
@@ -472,6 +608,18 @@ class LTMManager:
         if query_lower in entry.category.lower():
             score += 1
         return score
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Null Lock (filelock not installed fallback)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _NullLock:
+    """无操作锁，filelock 未安装时的降级方案。"""
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────

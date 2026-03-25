@@ -6,11 +6,26 @@ security/encryptor.py — AES-256-GCM Encryptor
     用 AES-256-GCM 对敏感字符串进行加密和解密，密文存储在 secure/encrypted.json。
     使用 PBKDF2-HMAC-SHA256 从用户提供的 passphrase 派生加密密钥。
 
+passphrase 管理方式（优先级从高到低）：
+    1. 调用方显式传入 passphrase 参数（最高优先级，适合程序内部调用）
+    2. 环境变量 MEMORY_PASSPHRASE（推荐生产环境，如：export MEMORY_PASSPHRASE="your-strong-pass"）
+    3. 未提供且内容被检测为敏感：存储脱敏版本而不加密（降级安全模式）
+
+设置环境变量示例：
+    Windows:  $env:MEMORY_PASSPHRASE = "your-strong-passphrase"
+    Linux/Mac: export MEMORY_PASSPHRASE="your-strong-passphrase"
+    .env 文件（推荐）: MEMORY_PASSPHRASE=your-strong-passphrase（配合 python-dotenv）
+
+注意：
+    - passphrase 不会被记录到任何日志或存储文件中
+    - 忘记 passphrase 将永久无法解密（无后门），请务必备份
+
 暴露接口 (Exposes):
     Encryptor.encrypt(key, plaintext, passphrase) -> entry_id
     Encryptor.decrypt(entry_id, passphrase) -> plaintext
     Encryptor.delete(entry_id, passphrase) -> bool
     Encryptor.list_keys() -> list[dict]
+    Encryptor.get_passphrase(explicit=None) -> str | None  # 新增：统一获取 passphrase
 
 依赖 (Depends on):
     cryptography, json, pathlib, os, hashlib (stdlib)
@@ -112,6 +127,30 @@ class Encryptor:
         self._secure_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Public Interface ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def get_passphrase(explicit: str | None = None) -> str | None:
+        """
+        统一获取 passphrase 的入口，优先级：显式传入 > 环境变量 > None。
+
+        Args:
+            explicit: 调用方显式传入的 passphrase（None 表示未提供）。
+
+        Returns:
+            passphrase 字符串，或 None（表示无可用 passphrase）。
+
+        使用示例：
+            passphrase = Encryptor.get_passphrase(explicit=user_input)
+            if passphrase:
+                entry_id = enc.encrypt("my_key", secret, passphrase)
+            else:
+                # 无 passphrase，降级为脱敏存储
+                ...
+        """
+        if explicit:
+            return explicit
+        env_pass = os.environ.get("MEMORY_PASSPHRASE", "").strip()
+        return env_pass if env_pass else None
 
     def encrypt(
         self,

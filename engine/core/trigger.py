@@ -13,6 +13,71 @@ core/trigger.py — Memory Trigger Suggestion Engine
 
 暴露接口:
     TriggerEngine.analyze(events) -> list[SaveSuggestion]
+    TriggerEngine.analyze_text(text) -> list[SaveSuggestion]
+
+─────────────────────────────────────────────────────────
+触发规则说明（Trigger Rules Reference）
+─────────────────────────────────────────────────────────
+
+触发引擎使用两套正则规则集：_LTM_RULES（长期记忆）和 _KB_RULES（知识库）。
+
+每条规则格式：
+    (pattern, category, confidence_boost, reason, tags)
+
+confidence_boost 取值含义：
+    0.90 → 非常确定，几乎必须保存（如用户明确说出名字）
+    0.85 → 高置信度（如明确的偏好/厌恶表达）
+    0.80 → 较高置信度（如负向偏好、个人信息）
+    0.75 → 中等置信度（如概念定义、知识陈述）
+    0.70 → 最低可通过阈值（如操作步骤）
+
+_CONFIDENCE_THRESHOLD = 0.70：低于此值的建议不会输出。
+
+LTM 规则（存入长期记忆）：
+┌──────────────────────────────┬───────────┬────────┬──────────────────┐
+│ 触发模式                      │ category  │ 置信度  │ 说明              │
+├──────────────────────────────┼───────────┼────────┼──────────────────┤
+│ 我喜欢/我偏好...              │ preference│ 0.85   │ 正向偏好           │
+│ I like/prefer/enjoy...       │ preference│ 0.85   │ 正向偏好（英文）    │
+│ 不喜欢/讨厌/我不想...          │ preference│ 0.80   │ 负向偏好           │
+│ hate/don't like/dislike...   │ preference│ 0.80   │ 负向偏好（英文）    │
+│ 我的目标/我计划/我打算...       │ goal      │ 0.82   │ 目标/计划          │
+│ My goal/I want to/I plan...  │ goal      │ 0.82   │ 目标/计划（英文）   │
+│ 我叫/我的名字是/我是[姓名]       │ profile   │ 0.90   │ 身份信息           │
+│ I'm/I am/My name is...       │ profile   │ 0.90   │ 身份信息（英文）    │
+│ 我住在/我在/我来自...           │ profile   │ 0.85   │ 地理/工作信息       │
+│ I live in/I'm from...        │ profile   │ 0.85   │ 地理/工作信息（英文）│
+│ 我每天/我习惯/我一般...          │ habit     │ 0.78   │ 日常习惯           │
+│ I usually/I always...        │ habit     │ 0.78   │ 日常习惯（英文）    │
+└──────────────────────────────┴───────────┴────────┴──────────────────┘
+
+KB 规则（存入知识库）：
+┌──────────────────────────────┬───────────┬────────┬──────────────────┐
+│ 触发模式                      │ category  │ 置信度  │ 说明              │
+├──────────────────────────────┼───────────┼────────┼──────────────────┤
+│ 是指/是一种/的意思是...          │ technical │ 0.75   │ 概念定义/解释       │
+│ defined as/means that/...    │ technical │ 0.75   │ 概念定义（英文）    │
+│ 研究表明/数据显示/根据...表明     │ reference │ 0.72   │ 事实性陈述          │
+│ according to/studies show... │ reference │ 0.72   │ 事实性陈述（英文）  │
+│ 步骤/第一步/首先...             │ technical │ 0.70   │ 操作步骤           │
+│ how to/step N/first then...  │ technical │ 0.70   │ 操作步骤（英文）    │
+└──────────────────────────────┴───────────┴────────┴──────────────────┘
+
+输入事件格式（events 列表）：
+    [
+        {
+            "event_type": "user_message",  # 只分析 user_message/user_input/message
+            "content": "用户说的话",
+            "timestamp": "2026-03-25T12:00:00+00:00"
+        }
+    ]
+
+自定义规则（如需扩展）：
+    直接向 _LTM_RULES 或 _KB_RULES 列表追加规则即可。
+    格式：(r"正则pattern", "category", 置信度, "触发说明", ["标签1", "标签2"])
+    注意：confidence 必须 >= 0.70 才会被输出。
+
+─────────────────────────────────────────────────────────
 """
 
 from __future__ import annotations

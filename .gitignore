@@ -7,10 +7,16 @@ engine/memory-bank/secure/encrypted.json
 # 用户测试数据
 memory-bank/projects/
 memory-bank/long-term-memory.md
+memory-bank/long-term-memory-*.md
+memory-bank/long-term-memory.migrated.md
 memory-bank/knowledge-base.md
+memory-bank/employees/
 engine/memory-bank/projects/
 engine/memory-bank/long-term-memory.md
+engine/memory-bank/long-term-memory-*.md
+engine/memory-bank/long-term-memory.migrated.md
 engine/memory-bank/knowledge-base.md
+engine/memory-bank/employees/
 
 # Python
 __pycache__/
