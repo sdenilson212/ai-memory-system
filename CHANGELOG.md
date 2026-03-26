@@ -7,6 +7,31 @@
 
 ---
 
+## [1.4.0] - 2026-03-26
+
+### 新增 / Added
+
+#### 自适应 Skill 系统（Adaptive Skill System）核心功能实装
+- ✅ `_try_layer_1()`：接通真实 KB 搜索 + 本地缓存，支持中文字符 2-gram 分词匹配
+- ✅ `_compute_skill_relevance()`：Skill 与问题的关联度计算（0-1 分）
+- ✅ `_skill_from_kb_entry()`：将 KB 条目包装为轻量 Skill 壳，可直接执行
+- ✅ `_execute_framework_step()`：框架步骤真实处理，传递自定义说明与上下文
+- ✅ `_execute_memory_step()`：记忆步骤应用问题关键词，生成个性化建议
+- ✅ `_execute_generated_step()`：自动生成步骤整合前序输出，附置信度标注
+- ✅ `_analyze_feedback()`：情感三态（positive / negative / neutral）+ 6 类方面词提取（步骤/内容/数量/方向/数据/格式）
+- ✅ `_try_layer_2/3` 导入兼容：相对导入失败时自动动态加载，支持包外直接运行
+
+### 测试 / Tests
+- ✅ `tests/test_adaptive_skill_system.py`：新建 23 个单元测试，全部通过（23 passed / 0.16s）
+  - 覆盖：Skill 序列化、执行器三类步骤、反馈分析、Layer 1 缓存命中/未命中/废弃跳过、Solve 端到端、KB 条目转 Skill
+
+### 修复 / Fixed
+- ✅ `confidence=0` 修正为 `0.0`（类型一致性）
+- ✅ 情感分析正面词全改为整词匹配，避免中文子串误命中（如"请"被误判为正面）
+- ✅ Layer 1 匹配阈值调整为 0.40，适应中文分词粒度
+
+---
+
 ## [1.3.0] - 2026-03-25
 
 ### 修复 / Fixed
