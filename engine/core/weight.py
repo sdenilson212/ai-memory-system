@@ -181,8 +181,8 @@ class MemoryWeight:
                             time_score = 0.5 * (1 - (days_diff - 7) / 23)
                         else:
                             time_score = 0.1
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"计算时间衰减分失败: {e}")
                 else:
                     # 没有时间信息，默认给中等分
                     time_score = 0.3
@@ -299,6 +299,6 @@ class MemoryWeight:
         if self.weight_file and self.weight_file.exists():
             try:
                 self.weight_file.unlink()
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"删除权重文件失败: {e}")
         logger.info("Cleared all weight entries")

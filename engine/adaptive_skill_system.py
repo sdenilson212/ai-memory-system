@@ -412,7 +412,8 @@ class AdaptiveSkillSystem:
                     if path.exists():
                         memory_dir = str(path)
                         break
-            except:
+            except Exception as e:
+                logger.warning(f"自动检测记忆目录失败: {e}")
                 memory_dir = None
         
         # 创建记忆客户端

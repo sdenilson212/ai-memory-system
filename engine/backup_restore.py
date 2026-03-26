@@ -227,8 +227,8 @@ class BackupManager:
                     total_size = 0
                     try:
                         total_size = sum(f.stat().st_size for f in folder.rglob('*') if f.is_file())
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"计算备份文件夹大小失败 {folder.name}: {e}")
                     
                     backups.append({
                         "name": folder.name,
@@ -302,8 +302,8 @@ class BackupManager:
                     backup_time = datetime.fromisoformat(backup["timestamp"]).timestamp()
                     if backup_time > cutoff_time:
                         continue  # 还在保留期内
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"解析备份时间戳失败 {backup.get('name', '?')}: {e}")
             
             # 删除
             try:

@@ -31,7 +31,7 @@ from enum import Enum
 
 class SensitiveCategory(str, Enum):
     API_KEY       = "api_key"
-    PASSWORD      = "password"
+    PASSWORD      = "password"    # nosec B105 - This is a category label, not a credential
     NATIONAL_ID   = "national_id"     # 身份证号
     BANK_CARD     = "bank_card"       # 银行卡号
     PRIVATE_KEY   = "private_key"     # PEM 私钥

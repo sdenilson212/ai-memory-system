@@ -165,8 +165,8 @@ class MemorySystemClient:
         vector_results = []
         try:
             vector_results = self.vector_store.search(query, top_k=top_k * 2)
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"向量搜索不可用，回退到关键词搜索: {e}")
         
         # 合并结果
         combined = []
