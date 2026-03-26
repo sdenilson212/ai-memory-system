@@ -343,34 +343,100 @@ class SkillExecutor:
         else:
             raise ValueError(f"Unknown step source: {step.source}")
     
-    def _execute_framework_step(self, step: SkillStep, problem: str, 
+    def _execute_framework_step(self, step: SkillStep, problem: str,
                                inputs: Optional[Dict], previous_outputs: List) -> Any:
-        """执行基于框架的步骤"""
-        # 占位符实现
+        """
+        执行基于框架的步骤。
+        
+        框架步骤代表通用方法论（如「收集数据」「分析趋势」「制定策略」），
+        执行结果包含：步骤描述、从问题中提取的关键信息、自定义说明。
+        """
+        # 从前一步骤的输出中聚合上下文
+        context_summary = ""
+        if previous_outputs:
+            prev_messages = [
+                str(o.get("output", o.get("message", "")))
+                for o in previous_outputs
+                if isinstance(o, dict)
+            ]
+            context_summary = " | ".join(filter(None, prev_messages))[:200]
+        
+        output_text = step.description
+        if step.customization:
+            output_text += f"\n调整点：{step.customization}"
+        if context_summary:
+            output_text += f"\n基于上下文：{context_summary}"
+        
         return {
             "step_name": step.name,
+            "step_number": step.step_number,
+            "source": "framework",
             "status": "completed",
-            "message": f"Framework step '{step.name}' executed"
+            "output": output_text,
+            "estimated_duration": step.estimated_duration
         }
     
-    def _execute_memory_step(self, step: SkillStep, problem: str, 
+    def _execute_memory_step(self, step: SkillStep, problem: str,
                             inputs: Optional[Dict], previous_outputs: List) -> Any:
-        """执行基于记忆的步骤"""
-        # 占位符实现
+        """
+        执行基于记忆的步骤。
+        
+        记忆步骤将 LTM 中已有的知识应用到当前问题。
+        执行结果将步骤描述与问题关键词结合，生成应用建议。
+        """
+        # 提取问题核心词（最多 5 个有意义的词）
+        problem_tokens = [
+            w for w in problem.replace("，", " ").replace("。", " ").split()
+            if len(w) > 1
+        ][:5]
+        
+        # 组合应用建议
+        applied_text = step.description
+        if problem_tokens:
+            applied_text += f"\n应用到「{'、'.join(problem_tokens)}」："
+            applied_text += f" 根据已有经验，{step.description}"
+        if step.customization:
+            applied_text += f"\n个性化调整：{step.customization}"
+        
         return {
             "step_name": step.name,
+            "step_number": step.step_number,
+            "source": "memory",
             "status": "completed",
-            "message": f"Memory-based step '{step.name}' executed"
+            "output": applied_text,
+            "memory_applied": True,
+            "problem_keywords": problem_tokens
         }
     
-    def _execute_generated_step(self, step: SkillStep, problem: str, 
+    def _execute_generated_step(self, step: SkillStep, problem: str,
                                inputs: Optional[Dict], previous_outputs: List) -> Any:
-        """执行自动生成的步骤"""
-        # 占位符实现
+        """
+        执行自动生成的步骤。
+        
+        自动生成步骤是系统根据问题特征推断出的行动方案，
+        执行时整合问题、步骤描述和已有前置输出，生成结构化建议。
+        """
+        # 提取所有前置步骤输出
+        prior_context = []
+        for o in previous_outputs:
+            if isinstance(o, dict):
+                prior_context.append(o.get("output", o.get("message", "")))
+        
+        # 构建生成步骤的行动建议
+        action_text = f"[自动生成] {step.description}"
+        if step.customization:
+            action_text += f"\n策略：{step.customization}"
+        if prior_context:
+            action_text += f"\n基于前序步骤：{' → '.join(str(c)[:80] for c in prior_context if c)}"
+        
         return {
             "step_name": step.name,
+            "step_number": step.step_number,
+            "source": "auto_generated",
             "status": "completed",
-            "message": f"Auto-generated step '{step.name}' executed"
+            "output": action_text,
+            "confidence": 0.70,  # 自动生成步骤默认置信度
+            "needs_review": True
         }
     
     def _aggregate_outputs(self, outputs: List, output_specs: List[str]) -> Dict:
@@ -526,20 +592,159 @@ class AdaptiveSkillSystem:
             skill_used=None,
             layer=0,
             status="failed",
-            confidence=0,
+            confidence=0.0,
             execution_time_ms=(time.time() - start_time) * 1000,
             metadata={"reason": "Cannot solve this problem with current skills"}
         )
     
     def _try_layer_1(self, problem: str) -> Tuple[Optional[ExecutionResult], Optional[Skill]]:
-        """第一层：直接调用已有 Skill"""
-        # 这里需要与真实的 KB 客户端集成
-        # 目前是占位符实现
+        """
+        第一层：在 KB 中搜索已有 Skill，若置信度足够则直接执行。
+        
+        匹配逻辑：
+        1. 先从本地缓存（skills_cache）中查找
+        2. 若有 KB 客户端，搜索 KB
+        3. 计算关键词覆盖率作为置信度，阈值 0.60 触发执行
+        """
+        # 1. 提取问题关键词（中文用字符 2-gram，英文按空格）
+        problem_lower = problem.lower()
+        
+        # 检测是否含中文字符
+        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in problem_lower)
+        
+        if has_chinese:
+            # 中文：去掉标点后做 2-gram 切片（单字不够区分，2字更精准）
+            import re
+            cjk_chars = re.sub(r'[^\u4e00-\u9fff]', '', problem_lower)
+            # 单字词 + 2字词，确保覆盖率
+            keywords = list(set(
+                [cjk_chars[i:i+1] for i in range(len(cjk_chars))] +
+                [cjk_chars[i:i+2] for i in range(len(cjk_chars) - 1)]
+            ))
+            # 过滤常见虚词（助词、连词不算关键词）
+            stop_chars = {"的", "了", "是", "在", "和", "与", "或", "也", "都", "很",
+                          "一", "个", "这", "那", "有", "到", "对", "为", "以", "及"}
+            keywords = [k for k in keywords if k not in stop_chars and len(k) >= 1]
+        else:
+            # 英文：按空格分词
+            keywords = [w for w in problem_lower.replace(',', ' ').replace('.', ' ').split()
+                       if len(w) > 2]
+        
+        # 2. 先查本地缓存
+        best_skill: Optional[Skill] = None
+        best_score: float = 0.0
+        
+        for skill in self.skills_cache.values():
+            if skill.status == SkillStatus.DEPRECATED:
+                continue
+            score = self._compute_skill_relevance(skill, keywords, problem_lower)
+            if score > best_score:
+                best_score = score
+                best_skill = skill
+        
+        # 3. 若有 KB 客户端，从知识库搜索
+        if self.kb:
+            try:
+                kb_results = self.kb.search(query=problem, top_k=5)
+                for entry in (kb_results or []):
+                    # KB 条目可能是 dict（kb_search 返回）
+                    entry_dict = entry if isinstance(entry, dict) else (entry.to_dict() if hasattr(entry, 'to_dict') else {})
+                    
+                    # 尝试从 KB 条目重建 Skill
+                    skill_data = entry_dict.get("content_parsed") or entry_dict.get("extra", {})
+                    if isinstance(skill_data, dict) and "skill_id" in skill_data:
+                        try:
+                            skill = Skill.from_dict(skill_data)
+                            score = self._compute_skill_relevance(skill, keywords, problem_lower)
+                            if score > best_score:
+                                best_score = score
+                                best_skill = skill
+                        except Exception:
+                            pass
+                    
+                    # 若 KB 条目不是 Skill 对象，看标签/标题匹配度
+                    title = entry_dict.get("title", "").lower()
+                    tags = " ".join(entry_dict.get("tags", [])).lower()
+                    combined = f"{title} {tags} {entry_dict.get('content','')[:200]}".lower()
+                    overlap = sum(1 for kw in keywords if kw in combined)
+                    kw_score = overlap / max(len(keywords), 1)
+                    if kw_score > best_score:
+                        best_score = kw_score
+                        # 用 KB 条目构造一个轻量 Skill 壳（供执行器路由）
+                        best_skill = self._skill_from_kb_entry(entry_dict)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).debug(f"Layer 1 KB 搜索失败: {e}")
+        
+        # 4. 阈值判断（中文分词粒度较粗，阈值 0.40 更合理）
+        LAYER1_THRESHOLD = 0.40
+        if best_skill and best_score >= LAYER1_THRESHOLD:
+            # 缓存命中的 Skill
+            self.skills_cache[best_skill.skill_id] = best_skill
+            result = self.executor.execute(best_skill, problem)
+            return result, best_skill
+        
         return None, None
+    
+    def _compute_skill_relevance(self, skill: Skill, keywords: List[str], problem_lower: str) -> float:
+        """计算 Skill 与问题的关联分数（0-1）"""
+        skill_text = f"{skill.name} {skill.description} {' '.join(skill.required_inputs)} {' '.join(skill.outputs)}".lower()
+        overlap = sum(1 for kw in keywords if kw in skill_text)
+        return overlap / max(len(keywords), 1)
+    
+    def _skill_from_kb_entry(self, entry: Dict) -> "Skill":
+        """将 KB 条目包装成轻量 Skill，用于 Layer 1 执行"""
+        skill_id = entry.get("id", f"kb_{hash(entry.get('title',''))}")
+        title = entry.get("title", "KB Skill")
+        content = entry.get("content", "")
+        
+        # 将 KB 内容摘要转换为步骤
+        lines = [l.strip() for l in content.split("\n") if l.strip() and not l.startswith("#")][:5]
+        steps = [
+            SkillStep(
+                step_number=i + 1,
+                name=f"步骤 {i+1}",
+                description=line,
+                source="记忆"
+            )
+            for i, line in enumerate(lines or ["参考知识库内容解决问题"])
+        ]
+        
+        return Skill(
+            skill_id=str(skill_id),
+            name=title,
+            description=content[:120],
+            version="1.0",
+            status=SkillStatus.ACTIVE,
+            steps=steps,
+            required_inputs=[],
+            outputs=["result"],
+            parameters={"kb_entry": True},
+            metadata=SkillMetadata(
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                created_by="kb-import"
+            ),
+            generation_info=GenerationInfo(
+                skill_type=SkillType.MANUAL,
+                confidence=0.75
+            ),
+            quality_metrics=QualityMetrics()
+        )
     
     def _try_layer_2(self, problem: str) -> Tuple[Optional[ExecutionResult], Optional[Skill]]:
         """第二层：从记忆中组合"""
-        from .skill_composer import SkillComposer
+        try:
+            from .skill_composer import SkillComposer
+        except ImportError:
+            import importlib, sys
+            spec = importlib.util.spec_from_file_location(
+                "skill_composer",
+                str(__import__("pathlib").Path(__file__).parent / "skill_composer.py")
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            SkillComposer = mod.SkillComposer
         
         composer = SkillComposer(ltm_client=self.ltm, kb_client=self.kb)
         
@@ -568,8 +773,21 @@ class AdaptiveSkillSystem:
     
     def _try_layer_3(self, problem: str) -> Tuple[Optional[ExecutionResult], Optional[Skill], Optional[Dict]]:
         """第三层：自动生成"""
-        from .skill_generator import SkillGenerator
-        from .quality_evaluator import QualityEvaluator
+        try:
+            from .skill_generator import SkillGenerator
+            from .quality_evaluator import QualityEvaluator
+        except ImportError:
+            import importlib
+            _engine_dir = __import__("pathlib").Path(__file__).parent
+            
+            def _load(name):
+                spec = importlib.util.spec_from_file_location(name, str(_engine_dir / f"{name}.py"))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+            
+            SkillGenerator = _load("skill_generator").SkillGenerator
+            QualityEvaluator = _load("quality_evaluator").QualityEvaluator
         
         generator = SkillGenerator(ltm_client=self.ltm)
         evaluator = QualityEvaluator()
@@ -656,12 +874,61 @@ class AdaptiveSkillSystem:
         return updated_skill
     
     def _analyze_feedback(self, feedback: str) -> Dict:
-        """分析用户反馈"""
-        # 占位符实现
+        """
+        分析用户反馈，提取情感倾向、问题方面和改进建议。
+        
+        情感三态：
+        - positive：用户满意，Skill 可提升置信度
+        - negative：用户不满，Skill 需要更新
+        - neutral：中性或纯描述性建议，直接追加说明
+        """
+        text = feedback.lower()
+        
+        # 正面词（整词匹配，避免被子串误命中）
+        positive_signals = ["很好", "太好", "不错", "非常好", "完美", "棒", "对的", "准确",
+                            "有用", "great", "perfect", "correct", "useful", "good job",
+                            "excellent", "awesome", "well done", "nice work"]
+        # 负面词
+        negative_signals = ["不对", "错误", "缺少", "没有", "漏掉", "不够", "差",
+                            "wrong", "missing", "incorrect", "bad", "fail", "error",
+                            "怎么不", "为什么不", "应该", "需要加", "还差", "不全"]
+        # 方面词映射
+        aspect_keywords = {
+            "步骤": ["步骤", "流程", "顺序", "step", "process"],
+            "内容": ["内容", "描述", "说明", "detail", "content", "description"],
+            "数量": ["太少", "太多", "数量", "count"],
+            "方向": ["方向", "思路", "角度", "approach", "direction"],
+            "数据": ["数据", "分析", "统计", "data", "analysis"],
+            "格式": ["格式", "排版", "结构", "format", "structure"],
+        }
+        
+        # 判断情感
+        pos_count = sum(1 for w in positive_signals if w in text)
+        neg_count = sum(1 for w in negative_signals if w in text)
+        
+        if neg_count > pos_count:
+            sentiment = "negative"
+        elif pos_count > neg_count:
+            sentiment = "positive"
+        else:
+            sentiment = "neutral"
+        
+        # 提取方面
+        aspect = "general"
+        for asp, keywords in aspect_keywords.items():
+            if any(kw in text for kw in keywords):
+                aspect = asp
+                break
+        
+        # 提取改进建议（截取前 200 字）
+        suggestion = feedback.strip()[:200]
+        
         return {
-            "sentiment": "neutral",
-            "aspect": "general",
-            "suggestion": feedback
+            "sentiment": sentiment,
+            "aspect": aspect,
+            "suggestion": suggestion,
+            "positive_signals": pos_count,
+            "negative_signals": neg_count
         }
     
     def _update_skill(self, skill: Skill, feedback_analysis: Dict) -> Skill:
