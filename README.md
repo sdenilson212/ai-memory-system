@@ -1,294 +1,296 @@
-# 🚀 自适应 Skill 系统 — 快速参考
+# AI Memory System
 
-**项目状态**: v1.0-alpha 完成  
-**完成时间**: 2026-03-18  
-**项目规模**: 3 个主要文档 + 500+ 行核心代码
+**持久化长期记忆、知识库和会话追踪系统 — 为 AI 应用提供跨会话记忆能力**
 
----
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![MCP Tools](https://img.shields.io/badge/MCP%20Tools-21-brightgreen.svg)](#mcp-tools)
 
-## 🎯 一句话描述
-
-**一个能够自学、自优化、持续进化的 AI 系统框架，它可以根据用户的使用和反馈，自动生成和更新解决方案。**
+[English](#english) | 中文
 
 ---
 
-## ⚡️ 核心创新：三层递进
+## 核心能力
+
+AI 默认没有记忆——每次对话结束，一切归零。
+
+**AI Memory System** 解决这个问题，为任何 AI 应用提供三层持久化记忆：
 
 ```
-问题来了
-    ↓
-Layer 1: 我之前见过这个问题吗？
-         └─ 是 → 直接返回 (<1秒)
-         └─ 否 ↓
-         
-Layer 2: 我能从之前的讨论中组合出答案吗？
-         └─ 能 → 组合后返回 (10-30秒)
-         └─ 不能 ↓
-         
-Layer 3: 我能用通用方法生成答案吗？
-         └─ 能 → 生成并验证 (1-5分钟)
-         └─ 不能 → 返回"无法解决"
+长期记忆（LTM）    ←  跨会话保存用户偏好、决策、项目事实
+知识库（KB）       ←  存储可复用的技术文档、方案、笔记
+会话追踪（STM）    ←  当前对话上下文、事件记录、待保存队列
 ```
 
 ---
 
-## 📊 项目构成
+## 特性
 
-### 文档 (3 个)
-
-| 文件 | 行数 | 内容 |
-|-----|------|------|
-| `ADAPTIVE_SKILL_SYSTEM.md` | 2000+ | 完整架构设计 |
-| `IMPLEMENTATION_GUIDE.md` | 1200+ | 实现指南 + 数据流示例 |
-| `PROJECT_SUMMARY.md` | 800+ | 项目总结 |
-
-### 代码
-
-| 文件 | 行数 | 内容 |
-|-----|------|------|
-| `adaptive_skill_system.py` | 500+ | 核心 Python 实现 |
-
-### 位置
-
-```
-C:\Users\sdenilson\WorkBuddy\Claw\output\ai-memory-system\
-```
+- **21 个 MCP 工具**：开箱即用，直接接入任何支持 MCP 协议的 AI 框架
+- **三层记忆架构**：LTM（长期）+ KB（知识库）+ STM（会话）
+- **AES-256-GCM 加密**：敏感数据自动检测并加密存储
+- **语义搜索**：基于向量相似度的记忆检索（可选，需 ChromaDB）
+- **自动去重**：相似内容自动检测，避免冗余记忆（阈值 85%）
+- **记忆权重**：1-5 级重要性评分，影响检索排序
+- **备份恢复**：自动备份 + 一键恢复
+- **Web UI**：内置可视化界面，浏览和管理所有记忆
 
 ---
 
-## 🎓 关键概念
+## 快速开始
 
-### Skill 是什么？
-
-**可复用的问题解决方案**，包含：
-- 解决步骤
-- 输入输出定义
-- 版本历史
-- 质量指标
-- 生成过程记录
-
-### 系统如何工作？
-
-```
-1. 用户提问
-   ↓
-2. 系统诊断：需要什么层级？
-   ├─ Layer 1 (快) → 直接调用
-   ├─ Layer 2 (中) → 组合创建
-   └─ Layer 3 (慢) → 智能生成
-   ↓
-3. 执行并返回结果
-   ↓
-4. 用户反馈
-   ↓
-5. 系统优化：更新 Skill，记录学习过程
-```
-
----
-
-## 💡 真实场景
-
-### 场景 1：常见问题
-```
-用户: "营销预算怎么分配？"
-系统: Layer 1 → 直接返回已有方案 (< 1秒)
-```
-
-### 场景 2：新的组合
-```
-用户: "针对 Z 世代的营销策略？"
-系统: Layer 2 → 组合 3 个知识源 (15秒)
-```
-
-### 场景 3：全新问题
-```
-用户: "火星采矿商业计划怎么做？"
-系统: Layer 3 → 生成试验版 Skill (2分钟)
-用户: "加入政策风险分析"
-系统: 更新 Skill → 保存到知识库
-```
-
----
-
-## 🔗 与 AI Memory System 的关系
-
-```
-AI Memory System (基础)
-  ├─ LTM: 长期记忆存储
-  ├─ KB: 知识库存储
-  └─ 会话追踪
-
-↓ 用来
-
-Adaptive Skill System (应用)
-  ├─ 主动学习
-  ├─ 自动生成
-  └─ 持续优化
-
-= 完整的 AI 自我完善生态
-```
-
----
-
-## 🚀 快速开始
-
-### 1. 查看完整架构
+### 安装
 
 ```bash
-打开: ADAPTIVE_SKILL_SYSTEM.md
-学习: 系统架构、数据模型、三层机制
+git clone https://github.com/sdenilson212/ai-memory-system.git
+cd ai-memory-system
+pip install -r requirements.txt
 ```
 
-### 2. 理解实现方案
+### 启动 MCP 服务器
 
 ```bash
-打开: IMPLEMENTATION_GUIDE.md
-学习: 各模块实现、数据流、测试策略
+python engine/mcp_server.py
 ```
 
-### 3. 查看代码
+### 在 AI 对话中使用
+
+```python
+# 保存一条记忆
+memory_save(
+    content="用户偏好深色模式，不喜欢过多动画",
+    category="preference",
+    tags=["ui", "preference"]
+)
+
+# 检索相关记忆
+results = memory_recall(query="用户界面偏好")
+
+# 搜索知识库
+docs = kb_search(query="React 组件最佳实践")
+```
+
+---
+
+## MCP 工具列表（21 个）
+
+### 长期记忆（LTM）
+
+| 工具 | 说明 |
+|------|------|
+| `memory_save` | 保存新记忆条目 |
+| `memory_recall` | 关键词搜索记忆 |
+| `memory_get` | 按 ID 获取单条记忆 |
+| `memory_update` | 更新现有记忆 |
+| `memory_delete` | 删除记忆（需 confirm=true） |
+| `memory_profile` | 获取用户档案摘要 |
+| `memory_list` | 列出所有记忆（可按分类过滤） |
+
+### 知识库（KB）
+
+| 工具 | 说明 |
+|------|------|
+| `kb_add` | 添加知识库条目 |
+| `kb_search` | 搜索知识库 |
+| `kb_update` | 更新知识库条目 |
+| `kb_delete` | 删除知识库条目 |
+| `kb_index` | 查看知识库索引 |
+| `kb_import` | 批量导入大段文本 |
+
+### 会话追踪（STM）
+
+| 工具 | 说明 |
+|------|------|
+| `session_start` | 开始新会话 |
+| `session_update` | 更新会话上下文 |
+| `session_event` | 记录会话事件 |
+| `session_queue` | 将内容加入待保存队列 |
+| `session_pending` | 查看待保存内容 |
+| `session_end` | 结束会话并获取摘要 |
+| `trigger_analyze` | 分析文本识别值得保存的内容 |
+| `memory_status` | 获取系统整体状态 |
+
+---
+
+## 架构
+
+```
+ai-memory-system/
+├── engine/
+│   ├── mcp_server.py        # MCP 服务器（主入口）
+│   ├── core/
+│   │   ├── ltm.py           # 长期记忆引擎
+│   │   ├── kb.py            # 知识库引擎
+│   │   ├── stm.py           # 会话追踪引擎
+│   │   ├── vector_store.py  # 向量检索（可选）
+│   │   ├── deduplicator.py  # 自动去重
+│   │   ├── weight.py        # 记忆权重
+│   │   └── encryption.py    # AES-256-GCM 加密
+│   └── memory-bank/         # 数据存储目录
+├── ui/                      # Web UI（React + TypeScript）
+└── backup_restore.py        # 备份恢复工具
+```
+
+---
+
+## 与 Adaptive Skill System 的关系
+
+本项目是 [Adaptive Skill System](https://github.com/sdenilson212/adaptive-skill-system) 的**记忆基础层**：
+
+```
+AI Memory System（记忆层）← 本项目
+    ↕ 读写
+Adaptive Skill System（执行层）
+    ↕ 接口
+你的 AI 应用
+```
+
+---
+
+## License
+
+MIT © [sdenilson212](https://github.com/sdenilson212)
+
+---
+
+<a name="english"></a>
+
+## English
+
+**AI Memory System** — A persistent long-term memory, knowledge base, and session tracking system that gives any AI application cross-session memory capabilities.
+
+### The Problem
+
+AI has no memory by default — every conversation ends with a blank slate.
+
+**AI Memory System** solves this by providing a three-layer persistent memory backend for any AI application:
+
+```
+Long-Term Memory (LTM)  ←  Cross-session: user preferences, decisions, project facts
+Knowledge Base (KB)     ←  Reusable: technical docs, solutions, notes
+Session Tracking (STM)  ←  In-session: context, events, pending-save queue
+```
+
+---
+
+### Features
+
+- **21 MCP tools** — plug-and-play integration with any MCP-compatible AI framework
+- **Three-layer memory architecture** — LTM + KB + STM working together
+- **AES-256-GCM encryption** — sensitive data auto-detected and encrypted at rest
+- **Semantic search** — vector similarity retrieval (optional, requires ChromaDB)
+- **Auto-deduplication** — similar content detected automatically, threshold 85%
+- **Memory weighting** — 1-5 importance scoring influences retrieval ranking
+- **Backup & restore** — scheduled backups + one-click restore
+- **Web UI** — built-in dashboard to browse and manage all memories
+
+---
+
+### Quick Start
 
 ```bash
-打开: adaptive_skill_system.py
-学习: Python 实现、类定义、主类逻辑
+git clone https://github.com/sdenilson212/ai-memory-system.git
+cd ai-memory-system
+pip install -r requirements.txt
+
+# Start MCP server
+python engine/mcp_server.py
 ```
 
-### 4. 了解项目全貌
+```python
+# Save a memory
+memory_save(
+    content="User prefers dark mode and minimal animations",
+    category="preference",
+    tags=["ui", "preference"]
+)
 
-```bash
-打开: PROJECT_SUMMARY.md
-学习: 成果总结、应用场景、未来方向
+# Recall related memories
+results = memory_recall(query="user interface preferences")
+
+# Search the knowledge base
+docs = kb_search(query="React component best practices")
 ```
 
 ---
 
-## ✨ 系统的亮点
+### MCP Tool Reference (21 tools)
 
-### 1. 三层递进 = 成本优化
-- Layer 1: 最快、最可靠（已有 Skill）
-- Layer 2: 中等速度、好可靠性（组合）
-- Layer 3: 最慢但最强（自动生成）
+**Long-Term Memory (LTM)**
 
-### 2. 被动驱动 = 稳定安全
-- 不主动干扰系统
-- 只在用户质疑时优化
-- 学习方向由用户反馈决定
+| Tool | Description |
+|------|-------------|
+| `memory_save` | Save a new memory entry |
+| `memory_recall` | Search memories by keyword |
+| `memory_get` | Retrieve a single entry by ID |
+| `memory_update` | Update an existing memory |
+| `memory_delete` | Delete a memory (requires confirm=true) |
+| `memory_profile` | Get a structured user profile summary |
+| `memory_list` | List all memories (filterable by category) |
 
-### 3. 完整可追溯 = 可信度高
-- 每个 Skill 记录生成过程
-- 版本历史清晰
-- 能看到为什么更新
+**Knowledge Base (KB)**
 
-### 4. 多域通用 = 高复用性
-- 不依赖特定领域
-- 营销、编程、产品设计都适用
-- 架构适用于任何复杂问题
+| Tool | Description |
+|------|-------------|
+| `kb_add` | Add a knowledge base entry |
+| `kb_search` | Search the knowledge base |
+| `kb_update` | Update a KB entry |
+| `kb_delete` | Delete a KB entry |
+| `kb_index` | Browse KB index (no full content) |
+| `kb_import` | Bulk-import a large text document |
 
----
+**Session Tracking (STM)**
 
-## 📈 这个系统能做什么？
-
-### ✅ 能做的
-
-- ✅ 快速解决常见问题
-- ✅ 组合已有知识解决新问题
-- ✅ 自动生成解决方案
-- ✅ 从用户反馈中学习
-- ✅ 自动优化 Skill
-- ✅ 记录完整学习历程
-
-### ⏳ 后续能做的
-
-- 🔄 跨团队协作和知识共享
-- 🔄 多语言支持
-- 🔄 Web UI 界面
-- 🔄 企业级部署
-- 🔄 性能和效率优化
+| Tool | Description |
+|------|-------------|
+| `session_start` | Start a new session |
+| `session_update` | Update a session context key-value |
+| `session_event` | Log a notable session event |
+| `session_queue` | Queue an item for pending save |
+| `session_pending` | View all pending saves |
+| `session_end` | End session and get summary |
+| `trigger_analyze` | Analyze text for memory-worthy content |
+| `memory_status` | Get overall system status and stats |
 
 ---
 
-## 🎯 项目价值
+### Repository Structure
 
-### 1. 解决了 AI 的核心问题
-**AI 不能像人一样从经验中学习和进化**
-→ 本系统提供了一个通用框架
-
-### 2. 充分利用 AI Memory System
-**记忆存储是资源，如何充分利用？**
-→ 本系统将被动记忆转化为主动学习
-
-### 3. 可实现且有前景
-**架构清晰、路径明确、成功指标明确**
-→ 可以逐步迭代，持续优化
-
-### 4. 高扩展性
-**不局限于某个领域或场景**
-→ 任何需要系统解决的问题都适用
-
----
-
-## 🔄 下一步计划
-
-### Phase 1：完整实现 (1-2 周)
-- [ ] Layer 2 (组合) 完全实现
-- [ ] Layer 3 (生成) 完全实现
-- [ ] KB/LTM API 完整集成
-
-### Phase 2：测试优化 (2-3 周)
-- [ ] 真实场景测试
-- [ ] 用户反馈收集
-- [ ] 性能优化
-
-### Phase 3：部署发布 (1-2 周)
-- [ ] API 服务部署
-- [ ] Web UI
-- [ ] 文档完善
+```
+ai-memory-system/
+├── engine/
+│   ├── mcp_server.py        # MCP server (main entry point)
+│   ├── core/
+│   │   ├── ltm.py           # Long-term memory engine
+│   │   ├── kb.py            # Knowledge base engine
+│   │   ├── stm.py           # Session tracking engine
+│   │   ├── vector_store.py  # Vector retrieval (optional)
+│   │   ├── deduplicator.py  # Auto-deduplication
+│   │   ├── weight.py        # Memory weighting
+│   │   └── encryption.py    # AES-256-GCM encryption
+│   └── memory-bank/         # Data storage directory
+├── ui/                      # Web UI (React + TypeScript)
+└── backup_restore.py        # Backup and restore tool
+```
 
 ---
 
-## 📞 相关资源
+### Relationship with Adaptive Skill System
 
-**AI Memory System (基础)**
-- GitHub: https://github.com/sdenilson212/ai-memory-system
-- 版本: v1.2.0
+This project serves as the **memory foundation layer** for [Adaptive Skill System](https://github.com/sdenilson212/adaptive-skill-system):
 
-**Adaptive Skill System (本项目)**
-- 路径: `C:\Users\sdenilson\WorkBuddy\Claw\output\ai-memory-system\`
-- 版本: v1.0-alpha
-- 状态: 设计和初始实现完成
+```
+AI Memory System  (memory layer — this project)
+        ↕
+Adaptive Skill System  (execution layer)
+        ↕
+Your AI application
+```
 
-**核心文档**
-1. 架构设计: `ADAPTIVE_SKILL_SYSTEM.md`
-2. 实现指南: `IMPLEMENTATION_GUIDE.md`
-3. 项目总结: `PROJECT_SUMMARY.md`
-4. 代码实现: `engine/adaptive_skill_system.py`
+Both systems can be used independently, or together for maximum effect.
 
 ---
 
-## 💬 核心洞察
+### License
 
-从这个项目的开发过程中，我们学到了：
-
-1. **被动比主动更优**
-   - 被动驱动的系统更稳定、更可控
-
-2. **分层处理问题**
-   - 快速路径解决 80% 的情况
-   - 智能路径处理特殊情况
-   - 生成路径应对新问题
-
-3. **记忆的真正价值**
-   - 记忆不是数据，是知识
-   - 能从记忆中学习才是真智能
-
-4. **反馈的重要性**
-   - 用户反馈是最好的训练信号
-   - 系统需要能响应反馈和自我优化
-
----
-
-**这是 AI 自我完善的一个新方向。让 AI 不仅能思考，还能学习和进化。**
-
-从记忆 → 学习 → 优化 → 进化
-
-🚀 开始探索吧！
+MIT © [sdenilson212](https://github.com/sdenilson212)
