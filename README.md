@@ -4,7 +4,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![MCP Tools](https://img.shields.io/badge/MCP%20Tools-21-brightgreen.svg)](#mcp-tools)
+[![MCP Tools](https://img.shields.io/badge/MCP%20Tools-22-brightgreen.svg)](#mcp-tools)
 
 [English](#english) | 中文
 
@@ -26,7 +26,7 @@ AI 默认没有记忆——每次对话结束，一切归零。
 
 ## 特性
 
-- **21 个 MCP 工具**：开箱即用，直接接入任何支持 MCP 协议的 AI 框架
+- **22 个 MCP 工具**：开箱即用，直接接入任何支持 MCP 协议的 AI 框架
 - **三层记忆架构**：LTM（长期）+ KB（知识库）+ STM（会话）
 - **AES-256-GCM 加密**：敏感数据自动检测并加密存储
 - **语义搜索**：基于向量相似度的记忆检索（可选，需 ChromaDB）
@@ -72,7 +72,7 @@ docs = kb_search(query="React 组件最佳实践")
 
 ---
 
-## MCP 工具列表（21 个）
+## MCP 工具列表（22 个）
 
 ### 长期记忆（LTM）
 
@@ -175,7 +175,7 @@ Session Tracking (STM)  ←  In-session: context, events, pending-save queue
 
 ### Features
 
-- **21 MCP tools** — plug-and-play integration with any MCP-compatible AI framework
+- **22 MCP tools** — plug-and-play integration with any MCP-compatible AI framework
 - **Three-layer memory architecture** — LTM + KB + STM working together
 - **AES-256-GCM encryption** — sensitive data auto-detected and encrypted at rest
 - **Semantic search** — vector similarity retrieval (optional, requires ChromaDB)
@@ -214,7 +214,7 @@ docs = kb_search(query="React component best practices")
 
 ---
 
-### MCP Tool Reference (21 tools)
+### MCP Tool Reference (22 tools)
 
 **Long-Term Memory (LTM)**
 
