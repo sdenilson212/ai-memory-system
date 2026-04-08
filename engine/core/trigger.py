@@ -110,9 +110,12 @@ class SaveSuggestion:
 # 每条规则: (pattern, category, destination, confidence_boost, reason, tags)
 _LTM_RULES: list[tuple[str, str, float, str, list[str]]] = [
     # 偏好类 — 中文不需要 \s+，直接跟随内容
-    (r"(我比较喜欢|我很喜欢|我喜欢|我爱|我偏好|我倾向).{2,}",
+    # P0 修复：添加否定词排除，防止 "我不喜欢" 被误判为 "我喜欢"
+    (r"(?<!不)(我比较喜欢|我很喜欢|我喜欢|我爱|我偏好|我倾向).{2,}",
      "preference", 0.85, "检测到用户偏好表达", ["偏好"]),
-    (r"(I\s+(like|prefer|love|enjoy))\s+.{4,}",
+    # P0 修复：添加否定词排除，防止 "don't like" 被误判为 "like"
+    # 使用固定宽度后向引用（不支持变宽，所以拆分为两个模式）
+    (r"(?<!don't\s)(?<!dont\s)(?<!not\s)(I\s+(like|prefer|love|enjoy))\s+.{4,}",
      "preference", 0.85, "检测到用户偏好表达（英文）", ["偏好"]),
     (r"(不喜欢|讨厌|我不想|我不喜欢).{2,}",
      "preference", 0.80, "检测到用户负向偏好", ["偏好", "负向"]),

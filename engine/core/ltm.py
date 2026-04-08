@@ -27,16 +27,24 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+
 import frontmatter
 
 from security.detector import SensitiveDetector
 from security.encryptor import Encryptor
+
+
+def _load_frontmatter_file(path: Path):
+    """Load front matter via UTF-8 text to avoid frontmatter.load() deprecation noise."""
+    return frontmatter.loads(path.read_text(encoding="utf-8"))
+
 
 # ── 并发安全：文件锁 ──────────────────────────────────────────────────────────
 # 使用 filelock 保证多进程/多客户端同时读写时不丢数据。
@@ -57,24 +65,102 @@ except ImportError:
     _BM25_AVAILABLE = False
 
 
+def _normalize_text(text: str) -> str:
+    """Unicode-aware normalization for multilingual search."""
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+
+def _strip_diacritics(text: str) -> str:
+    """Create an accent-folded alias for Latin-based languages."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+
+def _is_cjk_char(char: str) -> bool:
+    code = ord(char)
+    return (
+        0x3400 <= code <= 0x4DBF  # CJK Extension A
+        or 0x4E00 <= code <= 0x9FFF  # CJK Unified Ideographs
+        or 0x3040 <= code <= 0x309F  # Hiragana
+        or 0x30A0 <= code <= 0x30FF  # Katakana
+        or 0xAC00 <= code <= 0xD7AF  # Hangul syllables
+    )
+
+
+
+def _script_runs(part: str) -> list[tuple[str, bool]]:
+    runs: list[tuple[str, bool]] = []
+    current: list[str] = []
+    current_is_cjk: Optional[bool] = None
+
+    for char in part:
+        is_cjk = _is_cjk_char(char)
+        if current and current_is_cjk != is_cjk:
+            runs.append(("".join(current), bool(current_is_cjk)))
+            current = [char]
+        else:
+            current.append(char)
+        current_is_cjk = is_cjk
+
+    if current:
+        runs.append(("".join(current), bool(current_is_cjk)))
+    return runs
+
+
+
+def _expand_cjk_run(part: str) -> list[str]:
+    tokens = list(part)
+    if len(part) > 1:
+        tokens.append(part)
+        tokens.extend(part[i : i + 2] for i in range(len(part) - 1))
+    return tokens
+
+
+
+def _append_unique(tokens: list[str], token: str) -> None:
+    if token and token not in tokens:
+        tokens.append(token)
+
+
+
 def _tokenize(text: str) -> list[str]:
     """
-    Simple tokenizer: lowercase + split on non-alphanumeric chars.
-    Works for both English words and individual Chinese characters.
-    简单分词：小写化后按非字母数字字符拆分，中文按字符拆分。
+    Unicode-aware tokenizer for Chinese, English, and other languages.
+    - NFKC + casefold normalization
+    - Preserve word tokens for spaced languages
+    - Split CJK runs into searchable chars/bigrams/full-run tokens
+    - Add accent-folded aliases for Latin-based languages
     """
-    text = text.lower()
-    # Chinese chars are split individually; latin tokens split on spaces/punct
+    normalized = _normalize_text(text)
     tokens: list[str] = []
-    for part in re.split(r"[^\w\u4e00-\u9fff]+", text):
-        if not part:
-            continue
-        # If the part contains Chinese chars, split each one out
-        if re.search(r"[\u4e00-\u9fff]", part):
-            tokens.extend(list(part))
-        else:
-            tokens.append(part)
-    return [t for t in tokens if t]
+
+    for part in re.findall(r"\w+", normalized, flags=re.UNICODE):
+        for run, is_cjk in _script_runs(part):
+            if is_cjk:
+                for token in _expand_cjk_run(run):
+                    _append_unique(tokens, token)
+                continue
+
+            _append_unique(tokens, run)
+            ascii_alias = _strip_diacritics(run)
+            if ascii_alias != run:
+                _append_unique(tokens, ascii_alias)
+
+    return tokens
+
+
+
+def _contains_query(text: str, query: str) -> bool:
+    normalized_text = _normalize_text(text)
+    normalized_query = _normalize_text(query)
+    if not normalized_query:
+        return False
+    if normalized_query in normalized_text:
+        return True
+    return _strip_diacritics(normalized_query) in _strip_diacritics(normalized_text)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -180,7 +266,9 @@ class LTMManager:
     def _lock_for(self, path: Path):
         """返回指定文件的锁（contextmanager）。无 filelock 时返回空上下文。"""
         if _FILELOCK_AVAILABLE:
-            return _FileLock(str(path) + ".lock", timeout=10)
+            # 增加超时时间，避免高并发场景锁竞争失败
+            # 基准测试中 32 个线程竞争同一把锁，30 秒应该足够
+            return _FileLock(str(path) + ".lock", timeout=30)
         return _NullLock()
 
     def _migrate_legacy_file(self) -> None:
@@ -195,7 +283,8 @@ class LTMManager:
             return  # 已迁移过
 
         try:
-            post = frontmatter.load(str(self._ltm_path))
+            post = _load_frontmatter_file(self._ltm_path)
+
             raw_entries = post.metadata.get("entries", [])
             if not isinstance(raw_entries, list) or not raw_entries:
                 self._ltm_path.rename(migrated_path)
@@ -219,8 +308,12 @@ class LTMManager:
                     self._save_shard(cat, existing + new_entries)
 
             self._ltm_path.rename(migrated_path)
-        except Exception:
-            pass  # 迁移失败不影响正常使用
+        except Exception as exc:
+            # P0 修复：异常不能被静默吞掉，必须记录日志
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"LTM 旧文件迁移失败：{exc}", exc_info=True)
+            # 继续正常启动（不影响现有记忆读写），但保留原始异常信息
 
     # ── Public Interface ──────────────────────────────────────────────────────
 
@@ -264,40 +357,98 @@ class LTMManager:
         # passphrase 优先级：显式传入 > 环境变量 MEMORY_PASSPHRASE > None（降级脱敏存储）
         resolved_passphrase = Encryptor.get_passphrase(explicit=passphrase)
 
-        encrypted_ref = None
-        stored_content = content
+        # 分片优化：在同一把锁里完成读 + 去重检查 + 创建条目 + 追加写入，确保原子性
+        path = self._shard_path(category)
+        try:
+            with self._lock_for(path):
+                # 在锁内加载现有条目
+                existing_entries: list[LTMEntry] = []
+                raw_entries: list[dict] = []
+                if path.exists():
+                    try:
+                        post = _load_frontmatter_file(path)
+                        loaded = post.metadata.get("entries", [])
+                        if isinstance(loaded, list):
+                            raw_entries = [item for item in loaded if isinstance(item, dict)]
+                            existing_entries = [_dict_to_entry(item) for item in raw_entries]
+                    except Exception:
+                        raw_entries = []
+                
+                # P0 修复：去重检查（必须在锁内执行，避免并发竞态）
+                try:
+                    from core.deduplicator import Deduplicator
+                    dedup = Deduplicator(similarity_threshold=0.85, method="cosine")
+                    
+                    existing_contents = [e.content for e in existing_entries]
+                    
+                    if dedup.is_duplicate(content, existing_contents):
+                        # 找到高度相似条目，返回现有条目而不是创建新条目
+                        duplicates = dedup.find_duplicates(content, existing_contents)
+                        if duplicates:
+                            best_match = duplicates[0]
+                            match_index = best_match["index"]
+                            if 0 <= match_index < len(existing_entries):
+                                return existing_entries[match_index]
+                except ImportError:
+                    # Deduplicator 未安装（非致命错误），继续正常保存流程
+                    pass
+                except Exception as dedup_exc:
+                    # 去重模块发生未知错误，记录日志并继续正常保存（不阻断核心功能）
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.debug(f"Deduplicator error (non-fatal): {dedup_exc}")
+                    pass
 
-        if sensitive:
-            if not resolved_passphrase:
-                # 敏感但没有提供 passphrase：存脱敏版本
-                stored_content = self._detector.redact(content)
-            else:
-                encrypted_ref = self._encryptor.encrypt(
-                    key=f"ltm_{uuid.uuid4().hex[:8]}",
-                    plaintext=content,
-                    passphrase=resolved_passphrase,
+                # 处理敏感信息和加密
+                encrypted_ref = None
+                stored_content = content
+
+                if sensitive:
+                    if not resolved_passphrase:
+                        # 敏感但没有提供 passphrase：存脱敏版本
+                        stored_content = self._detector.redact(content)
+                    else:
+                        encrypted_ref = self._encryptor.encrypt(
+                            key=f"ltm_{uuid.uuid4().hex[:8]}",
+                            plaintext=content,
+                            passphrase=resolved_passphrase,
+                            category=category,
+                        )
+                        stored_content = self._detector.redact(content)
+
+                # 创建新条目
+                entry = LTMEntry(
+                    id=str(uuid.uuid4()),
+                    content=stored_content,
                     category=category,
+                    source=source,
+                    tags=tags or [],
+                    created_at=_now_iso(),
+                    updated_at=_now_iso(),
+                    sensitive=sensitive,
+                    encrypted_ref=encrypted_ref,
                 )
-                stored_content = self._detector.redact(content)
 
-        entry = LTMEntry(
-            id=str(uuid.uuid4()),
-            content=stored_content,
-            category=category,
-            source=source,
-            tags=tags or [],
-            created_at=_now_iso(),
-            updated_at=_now_iso(),
-            sensitive=sensitive,
-            encrypted_ref=encrypted_ref,
-        )
+                raw_entries.append(asdict(entry))
+                metadata = {
+                    "category": category,
+                    "entries": raw_entries,
+                    "last_updated": _now_iso(),
+                    "entry_count": len(raw_entries),
+                }
+                post = frontmatter.Post("", **metadata)
+                path.write_text(frontmatter.dumps(post), encoding="utf-8")
+                
+                return entry
+                
+        except OSError as exc:
+            raise LTMError(f"Failed to save shard '{category}': {exc}") from exc
+        except Exception as exc:
+            # 捕获可能的 Timeout 或其他异常
+            if _FILELOCK_AVAILABLE and "Timeout" in str(type(exc).__name__):
+                raise LTMError(f"Failed to acquire lock for shard '{category}' (timeout): {exc}") from exc
+            raise LTMError(f"Unexpected error saving to shard '{category}': {exc}") from exc
 
-        # 分片优化：只加载/保存目标 category 的分片
-        entries = self._load_shard(category)
-        entries.append(entry)
-        self._save_shard(category, entries)
-
-        return entry
 
     def get(self, entry_id: str) -> Optional[LTMEntry]:
         """
@@ -333,16 +484,22 @@ class LTMManager:
         Returns:
             匹配的 LTMEntry 列表，按 BM25 相关性降序。
         """
-        if not query or not query.strip():
-            return self.list_all(category=category)
-
         # 分片优化：有 category 时只扫描对应分片，没有时全量
         all_entries = self._load_shard(category) if category else self._load_entries()
         pool = all_entries
         if not pool:
             return []
+        if not query or not query.strip():
+            return pool[:max_results]
 
         query_tokens = _tokenize(query)
+        if not query_tokens:
+            return pool[:max_results]
+
+        keyword_scores = [
+            sum(self._relevance_score(entry, tok) for tok in query_tokens)
+            for entry in pool
+        ]
 
         if _BM25_AVAILABLE and len(pool) >= 1:
             # Build corpus: combine content + title-like prefix + tags per entry
@@ -353,27 +510,33 @@ class LTMManager:
             bm25 = _BM25Okapi(corpus)
             scores = bm25.get_scores(query_tokens)
 
-            # Add field-boost on top of BM25 (tag exact match gets +0.5)
+            # Add field-boost on top of BM25 (normalized tag match gets +0.5)
             for i, entry in enumerate(pool):
-                tag_str = " ".join(entry.tags).lower()
-                if any(t in tag_str for t in query_tokens):
+                if any(_contains_query(tag, token) for tag in entry.tags for token in query_tokens):
                     scores[i] += 0.5
 
-            ranked = sorted(
-                ((scores[i], pool[i]) for i in range(len(pool)) if scores[i] > 0),
-                key=lambda x: x[0],
-                reverse=True,
-            )
-            return [e for _, e in ranked[:max_results]]
+
+            combined: list[tuple[float, float, int, LTMEntry]] = []
+            for i, entry in enumerate(pool):
+                bm25_score = max(float(scores[i]), 0.0)
+                keyword_score = keyword_scores[i]
+                total_score = bm25_score + keyword_score
+                if total_score > 0:
+                    combined.append((total_score, bm25_score, keyword_score, entry))
+
+            combined.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+            return [entry for _, _, _, entry in combined[:max_results]]
 
         # ── Fallback: multi-token keyword scoring ──────────────────────────────
-        results: list[tuple[float, LTMEntry]] = []
-        for entry in pool:
-            score = sum(self._relevance_score(entry, tok) for tok in query_tokens)
-            if score > 0:
-                results.append((score, entry))
+
+        results = [
+            (keyword_scores[i], pool[i])
+            for i in range(len(pool))
+            if keyword_scores[i] > 0
+        ]
         results.sort(key=lambda x: x[0], reverse=True)
         return [e for _, e in results[:max_results]]
+
 
     def update(
         self,
@@ -546,7 +709,7 @@ class LTMManager:
             return []
         try:
             with self._lock_for(path):
-                post = frontmatter.load(str(path))
+                post = _load_frontmatter_file(path)
             raw_entries = post.metadata.get("entries", [])
             if not isinstance(raw_entries, list):
                 return []
@@ -590,7 +753,7 @@ class LTMManager:
         except OSError as exc:
             raise LTMError(f"Failed to save shard '{category}': {exc}") from exc
 
-    def _relevance_score(self, entry: LTMEntry, query_lower: str) -> int:
+    def _relevance_score(self, entry: LTMEntry, query_token: str) -> int:
         """
         Simple relevance scoring for keyword search.
         关键词搜索的简单相关性评分。
@@ -601,13 +764,14 @@ class LTMManager:
           +1  category 包含 query
         """
         score = 0
-        if query_lower in entry.content.lower():
+        if _contains_query(entry.content, query_token):
             score += 3
-        if any(query_lower in tag.lower() for tag in entry.tags):
+        if any(_contains_query(tag, query_token) for tag in entry.tags):
             score += 2
-        if query_lower in entry.category.lower():
+        if _contains_query(entry.category, query_token):
             score += 1
         return score
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
