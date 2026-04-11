@@ -24,15 +24,24 @@ core/kb.py — Knowledge Base Manager
 from __future__ import annotations
 
 import re
+import unicodedata
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+
 import frontmatter
 
+
+def _load_frontmatter_file(path: Path):
+    """Load front matter via UTF-8 text to avoid frontmatter.load() deprecation noise."""
+    return frontmatter.loads(path.read_text(encoding="utf-8"))
+
+
 # BM25 optional
+
 try:
     from rank_bm25 import BM25Okapi as _BM25Okapi
     _BM25_AVAILABLE = True
@@ -41,18 +50,102 @@ except ImportError:
     _BM25_AVAILABLE = False
 
 
-def _tokenize(text: str) -> list[str]:
-    """Shared tokenizer: lowercase + split on non-alphanumeric + per-char Chinese."""
-    text = text.lower()
-    tokens: list[str] = []
-    for part in re.split(r"[^\w\u4e00-\u9fff]+", text):
-        if not part:
-            continue
-        if re.search(r"[\u4e00-\u9fff]", part):
-            tokens.extend(list(part))
+def _normalize_text(text: str) -> str:
+    """Unicode-aware normalization for multilingual search."""
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+
+def _strip_diacritics(text: str) -> str:
+    """Create an accent-folded alias for Latin-based languages."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+
+def _is_cjk_char(char: str) -> bool:
+    code = ord(char)
+    return (
+        0x3400 <= code <= 0x4DBF  # CJK Extension A
+        or 0x4E00 <= code <= 0x9FFF  # CJK Unified Ideographs
+        or 0x3040 <= code <= 0x309F  # Hiragana
+        or 0x30A0 <= code <= 0x30FF  # Katakana
+        or 0xAC00 <= code <= 0xD7AF  # Hangul syllables
+    )
+
+
+
+def _script_runs(part: str) -> list[tuple[str, bool]]:
+    runs: list[tuple[str, bool]] = []
+    current: list[str] = []
+    current_is_cjk: Optional[bool] = None
+
+    for char in part:
+        is_cjk = _is_cjk_char(char)
+        if current and current_is_cjk != is_cjk:
+            runs.append(("".join(current), bool(current_is_cjk)))
+            current = [char]
         else:
-            tokens.append(part)
-    return [t for t in tokens if t]
+            current.append(char)
+        current_is_cjk = is_cjk
+
+    if current:
+        runs.append(("".join(current), bool(current_is_cjk)))
+    return runs
+
+
+
+def _expand_cjk_run(part: str) -> list[str]:
+    tokens = list(part)
+    if len(part) > 1:
+        tokens.append(part)
+        tokens.extend(part[i : i + 2] for i in range(len(part) - 1))
+    return tokens
+
+
+
+def _append_unique(tokens: list[str], token: str) -> None:
+    if token and token not in tokens:
+        tokens.append(token)
+
+
+
+def _tokenize(text: str) -> list[str]:
+    """
+    Unicode-aware tokenizer for Chinese, English, and other languages.
+    - NFKC + casefold normalization
+    - Preserve word tokens for spaced languages
+    - Split CJK runs into searchable chars/bigrams/full-run tokens
+    - Add accent-folded aliases for Latin-based languages
+    """
+    normalized = _normalize_text(text)
+    tokens: list[str] = []
+
+    for part in re.findall(r"\w+", normalized, flags=re.UNICODE):
+        for run, is_cjk in _script_runs(part):
+            if is_cjk:
+                for token in _expand_cjk_run(run):
+                    _append_unique(tokens, token)
+                continue
+
+            _append_unique(tokens, run)
+            ascii_alias = _strip_diacritics(run)
+            if ascii_alias != run:
+                _append_unique(tokens, ascii_alias)
+
+    return tokens
+
+
+
+def _contains_query(text: str, query: str) -> bool:
+    normalized_text = _normalize_text(text)
+    normalized_query = _normalize_text(query)
+    if not normalized_query:
+        return False
+    if normalized_query in normalized_text:
+        return True
+    return _strip_diacritics(normalized_query) in _strip_diacritics(normalized_text)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,9 +304,6 @@ class KBManager:
         Returns:
             匹配的 KBEntry 列表，按 BM25 相关性降序。
         """
-        if not query or not query.strip():
-            return self.list_all(category=category, limit=top_k)
-
         all_entries = self._load_entries()
         pool = [
             e for e in all_entries
@@ -222,8 +312,17 @@ class KBManager:
         ]
         if not pool:
             return []
+        if not query or not query.strip():
+            return pool[:top_k]
 
         query_tokens = _tokenize(query)
+        if not query_tokens:
+            return pool[:top_k]
+
+        keyword_scores = [
+            sum(self._relevance_score(entry, tok) for tok in query_tokens)
+            for entry in pool
+        ]
 
         if _BM25_AVAILABLE and len(pool) >= 1:
             corpus = [
@@ -235,24 +334,31 @@ class KBManager:
 
             # Title exact-match bonus
             for i, entry in enumerate(pool):
-                if any(t in entry.title.lower() for t in query_tokens):
+                if any(_contains_query(entry.title, token) for token in query_tokens):
                     scores[i] += 1.0
 
-            ranked = sorted(
-                ((scores[i], pool[i]) for i in range(len(pool)) if scores[i] > 0),
-                key=lambda x: x[0],
-                reverse=True,
-            )
-            return [e for _, e in ranked[:top_k]]
+
+            combined: list[tuple[float, float, int, KBEntry]] = []
+            for i, entry in enumerate(pool):
+                bm25_score = max(float(scores[i]), 0.0)
+                keyword_score = keyword_scores[i]
+                total_score = bm25_score + keyword_score
+                if total_score > 0:
+                    combined.append((total_score, bm25_score, keyword_score, entry))
+
+            combined.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+            return [entry for _, _, _, entry in combined[:top_k]]
 
         # ── Fallback ──────────────────────────────────────────────────────────
-        results: list[tuple[float, KBEntry]] = []
-        for entry in pool:
-            score = sum(self._relevance_score(entry, tok) for tok in query_tokens)
-            if score > 0:
-                results.append((score, entry))
+
+        results = [
+            (keyword_scores[i], pool[i])
+            for i in range(len(pool))
+            if keyword_scores[i] > 0
+        ]
         results.sort(key=lambda x: x[0], reverse=True)
         return [e for _, e in results[:top_k]]
+
 
     def update(
         self,
@@ -427,7 +533,7 @@ class KBManager:
         if not self._kb_path.exists():
             return []
         try:
-            post = frontmatter.load(str(self._kb_path))
+            post = _load_frontmatter_file(self._kb_path)
             raw_entries = post.metadata.get("entries", [])
             if not isinstance(raw_entries, list):
                 return []
@@ -440,7 +546,8 @@ class KBManager:
             body = ""
             if self._kb_path.exists():
                 try:
-                    post = frontmatter.load(str(self._kb_path))
+                    post = _load_frontmatter_file(self._kb_path)
+
                     body = post.content or ""
                 except Exception:
                     pass

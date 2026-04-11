@@ -1,0 +1,13 @@
+importing config...
+MEMORY_DIR=C:\Users\sdenilson\WorkBuddy\Claw\output\ai-memory-system\engine\memory-bank
+importing ltm...
+LTMManager OK
+importing weight...
+MemoryWeight OK
+entries count=28
+  cat=preference w=3 content='User prefers dark mode UI'
+  cat=project w=2 content='Adaptive Skill System v1.2.0 发布审核完成：rele'
+  cat=decision w=3 content='用户纠正了 AI Memory System 跑分审核范围：默认只统计记忆系统自'
+  cat=decision w=3 content='【错误记录】2026-04-06 | Windows PowerShell 下直'
+  cat=decision w=3 content='【错误记录】2026-04-04：在 Windows PowerShell 中查'
+PASS

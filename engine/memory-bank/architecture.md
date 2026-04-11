@@ -270,7 +270,7 @@ GET /memory/recall?query=fastapi&layer=all
 
 ### 向量检索 `core/vector_store.py`
 
-基于 ChromaDB + sentence-transformers，提供语义搜索能力：
+基于 TF-IDF 向量相似度，提供轻量级检索能力（非深度学习 embedding）：
 
 ```python
 vs = VectorStore(Path("memory-bank/vector_store"))

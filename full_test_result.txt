@@ -1,0 +1,82 @@
+
+==================================================
+Running: verify.py
+==================================================
+=== AI Memory Engine - Verification ===
+[OK] All modules imported
+[OK] SensitiveDetector: API key detection
+[OK] SensitiveDetector: safe text passes
+[OK] Encryptor: encrypt/decrypt roundtrip
+[OK] Encryptor: list_keys does not expose ciphertext
+[OK] Encryptor: delete works
+[OK] LTMManager: save
+[OK] LTMManager: get
+[OK] LTMManager: search
+[OK] LTMManager: load_profile
+[OK] KBManager: add
+[OK] KBManager: search
+[OK] KBManager: get_index (no content leak)
+[OK] KBManager: import_text (1 chunks)
+[OK] STMManager: start_session
+[OK] STMManager: update_context
+[OK] STMManager: queue_save + get_pending_saves
+[OK] STMManager: end_session clears memory
+
+========================================
+ALL TESTS PASSED - Engine is ready!
+========================================
+
+RESULT: PASS (exit=0)
+
+==================================================
+Running: verify_fix.py
+==================================================
+
+====== 5个问题复核结果 ======
+  [PASS] 问题1 文件分片: 分片文件: ['long-term-memory-decision.md', 'long-term-memory-other.md', 'long-term-memory-preference.md', 'long-term-memory-project.md']
+  [PASS] 问题3 并发安全/filelock: filelock 可用: True
+  [PASS] 问题1 分片写入/读取: preference 分片条目数: 4
+  [PASS] 问题4 passphrase 环境变量: 读取结果: PASS
+  [PASS] 问题4 passphrase 显式优先: 显式传入优先: PASS
+  [PASS] 问题2 trigger文档: 置信度阈值: 0.7
+  [PASS] 问题5 向量搜索评估: 当前为TF-IDF占位实现，非真实embedding，已明确记录为已知限制
+  [PASS] 问题3 requirements.txt: filelock 依赖: 已添加
+============================
+总结: 全部通过
+
+RESULT: PASS (exit=0)
+
+==================================================
+Running: verify_mcp_tools.py
+==================================================
+
+[PASS] memory_save: basic
+[PASS] memory_recall: keyword search
+[PASS] memory_get: by ID
+[PASS] memory_update: change tags
+[PASS] memory_profile
+[PASS] memory_list
+[PASS] memory_delete: no-confirm raises error
+[PASS] memory_delete: confirmed
+[PASS] kb_add
+[PASS] kb_search
+[PASS] kb_index
+[PASS] kb_import
+[PASS] kb_update
+[PASS] kb_delete: confirmed
+[PASS] session_start
+[PASS] session_update
+[PASS] session_event
+[PASS] session_queue
+[PASS] session_pending
+[PASS] session_end
+[PASS] memory_status
+[PASS] trigger_analyze: text
+
+ALL 22 MCP TOOL TESTS PASSED
+
+RESULT: PASS (exit=0)
+
+==================================================
+SUMMARY: 3/3 PASS
+==================================================

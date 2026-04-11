@@ -1,0 +1,29 @@
+============================================================
+Extended Detector Pattern Tests (v1.5.1)
+============================================================
+
+[PASS] OpenAI API Key: Detected: openai_api_key
+[PASS] OpenAI Project Key: Detected: openai_project_key
+[FAIL] Anthropic API Key: Expected detection but got none
+[PASS] Generic API Key: Detected: generic_api_key
+[PASS] AWS Access Key: Detected: aws_access_key
+[PASS] AWS Secret Key: Detected: aws_secret_key
+[PASS] GitHub Token: Detected: github_token
+[PASS] Bearer Token: Detected: bearer_token
+[PASS] JWT Token: Detected: jwt_token
+[PASS] Password Assignment: Detected: password_assignment
+[PASS] Chinese National ID: Detected: chinese_national_id
+[PASS] Chinese Phone: Detected: chinese_phone_number
+[PASS] Bank Card: Detected: bank_card
+[PASS] Credit Card Visa: Detected: bank_card
+[PASS] PEM Private Key: Detected: pem_private_key
+[PASS] MongoDB URL: Detected: database_url
+[PASS] Env Secret: Detected: env_secret
+
+--- Negative Tests ---
+[PASS] Normal Text: No detection
+[PASS] Short Number: No detection
+
+============================================================
+Results: 18 passed, 1 failed
+============================================================

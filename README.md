@@ -29,7 +29,8 @@ AI 默认没有记忆——每次对话结束，一切归零。
 - **22 个 MCP 工具**：开箱即用，直接接入任何支持 MCP 协议的 AI 框架
 - **三层记忆架构**：LTM（长期）+ KB（知识库）+ STM（会话）
 - **AES-256-GCM 加密**：敏感数据自动检测并加密存储
-- **语义搜索**：基于向量相似度的记忆检索（可选，需 ChromaDB）
+- **混合检索**：BM25 关键词匹配 + 语义搜索（sentence-transformers），支持加权融合
+- **自动降级**：语义搜索依赖缺失或网络不通时，自动回退到纯 BM25
 - **自动去重**：相似内容自动检测，避免冗余记忆（阈值 85%）
 - **记忆权重**：1-5 级重要性评分，影响检索排序
 - **备份恢复**：自动备份 + 一键恢复
@@ -68,6 +69,39 @@ results = memory_recall(query="用户界面偏好")
 
 # 搜索知识库
 docs = kb_search(query="React 组件最佳实践")
+```
+
+---
+
+## 配置
+
+### 语义搜索（可选）
+
+v1.6.0+ 支持语义搜索，需要额外依赖：
+
+```bash
+pip install chromadb sentence-transformers numpy
+```
+
+**国内用户配置 HuggingFace 镜像**（模型下载加速）：
+```powershell
+# Windows（永久生效）
+setx HF_ENDPOINT "https://hf-mirror.com"
+
+# 当前 session 临时生效
+$env:HF_ENDPOINT="https://hf-mirror.com"
+```
+
+**降级机制**：语义搜索依赖缺失或网络不通时，系统自动回退到 BM25 关键词搜索，无需手动干预。
+
+### 混合检索参数
+
+```python
+# 启用语义搜索（默认 False）
+results = memory_recall(query="深度学习", use_semantic=True)
+
+# 调整语义权重（默认 0.6）
+results = memory_recall(query="深度学习", use_semantic=True, semantic_weight=0.7)
 ```
 
 ---
@@ -133,6 +167,32 @@ ai-memory-system/
 
 ---
 
+## 搜索能力说明
+
+### 关键词检索 (LTM/KB)
+
+本系统采用 **TF-IDF/BM25** 关键词匹配检索，适用于精确术语匹配场景。
+
+**支持的特性**：
+- 多关键词组合搜索
+- 中英文混合查询
+- 自动去重和相似度检测
+
+### 局限性
+
+- ⚠️ **不支持真正的语义搜索**：TF-IDF 基于词频统计，无法理解"狗"和"宠物"的语义关系
+- 同义词泛化能力有限
+- 跨语言检索不支持
+
+### 未来扩展
+
+如需完整的语义搜索能力，可自行集成：
+- [sentence-transformers](https://www.sbert.net/) (本地模型)
+- [OpenAI Embeddings](https://platform.openai.com/docs/guides/embeddings)
+- [ChromaDB](https://www.trychroma.com/) / [Milvus](https://milvus.io/) 向量数据库
+
+---
+
 ## 与 Adaptive Skill System 的关系
 
 本项目是 [Adaptive Skill System](https://github.com/sdenilson212/adaptive-skill-system) 的**记忆基础层**：
@@ -178,7 +238,7 @@ Session Tracking (STM)  ←  In-session: context, events, pending-save queue
 - **22 MCP tools** — plug-and-play integration with any MCP-compatible AI framework
 - **Three-layer memory architecture** — LTM + KB + STM working together
 - **AES-256-GCM encryption** — sensitive data auto-detected and encrypted at rest
-- **Semantic search** — vector similarity retrieval (optional, requires ChromaDB)
+- **Keyword search** — TF-IDF/BM25 based keyword matching and similarity scoring (not semantic search)
 - **Auto-deduplication** — similar content detected automatically, threshold 85%
 - **Memory weighting** — 1-5 importance scoring influences retrieval ranking
 - **Backup & restore** — scheduled backups + one-click restore

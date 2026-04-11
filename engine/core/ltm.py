@@ -36,9 +36,12 @@ from typing import Optional
 
 
 import frontmatter
+import logging
 
 from security.detector import SensitiveDetector
 from security.encryptor import Encryptor
+
+logger = logging.getLogger(__name__)
 
 
 def _load_frontmatter_file(path: Path):
@@ -182,6 +185,7 @@ class LTMEntry:
     updated_at: str = ""
     sensitive: bool = False
     encrypted_ref: Optional[str] = None  # entry_id in encrypted.json
+    similar_to: Optional[str] = None    # 引用相似条目的 ID，用于去重跟踪
 
 
 class LTMError(Exception):
@@ -253,8 +257,25 @@ class LTMManager:
         self._encryptor = encryptor or Encryptor(secure_dir)
         self._detector  = detector or SensitiveDetector()
 
+        # 初始化语义向量存储（v1.6.0）
+        self._vector_store: Optional[Any] = None
+        self._init_vector_store()
+
         # 首次初始化时，将旧版单文件数据迁移到分片
         self._migrate_legacy_file()
+    
+    def _init_vector_store(self) -> None:
+        """初始化语义向量存储（可选，失败不阻塞）"""
+        import logging
+        _logger = logging.getLogger(__name__)
+        try:
+            from core.vector_store import SemanticVectorStore
+            vector_dir = self._memory_dir / "vectors"
+            self._vector_store = SemanticVectorStore(vector_dir)
+            _logger.info("Vector store initialized for semantic search")
+        except Exception as e:
+            _logger.warning(f"Vector store init failed: {e}, semantic search disabled")
+            self._vector_store = None
 
     # ── 分片路径工具 ──────────────────────────────────────────────────────────
 
@@ -375,6 +396,8 @@ class LTMManager:
                         raw_entries = []
                 
                 # P0 修复：去重检查（必须在锁内执行，避免并发竞态）
+                # v2.0 修复：不再返回现有条目，改为创建新条目并标记相似性
+                similar_to_id = None
                 try:
                     from core.deduplicator import Deduplicator
                     dedup = Deduplicator(similarity_threshold=0.85, method="cosine")
@@ -382,13 +405,20 @@ class LTMManager:
                     existing_contents = [e.content for e in existing_entries]
                     
                     if dedup.is_duplicate(content, existing_contents):
-                        # 找到高度相似条目，返回现有条目而不是创建新条目
+                        # 找到高度相似条目，记录相似条目 ID，继续创建新条目
                         duplicates = dedup.find_duplicates(content, existing_contents)
                         if duplicates:
                             best_match = duplicates[0]
                             match_index = best_match["index"]
                             if 0 <= match_index < len(existing_entries):
-                                return existing_entries[match_index]
+                                similar_to_id = existing_entries[match_index].id
+                                # 记录日志但不中断保存流程
+                                import logging
+                                logger = logging.getLogger(__name__)
+                                logger.debug(
+                                    f"Found similar entry (similarity={best_match.get('similarity', 0.0):.2f}) "
+                                    f"for content: {content[:50]}..."
+                                )
                 except ImportError:
                     # Deduplicator 未安装（非致命错误），继续正常保存流程
                     pass
@@ -427,6 +457,7 @@ class LTMManager:
                     updated_at=_now_iso(),
                     sensitive=sensitive,
                     encrypted_ref=encrypted_ref,
+                    similar_to=similar_to_id,  # 记录相似条目 ID（如果存在）
                 )
 
                 raw_entries.append(asdict(entry))
@@ -438,6 +469,9 @@ class LTMManager:
                 }
                 post = frontmatter.Post("", **metadata)
                 path.write_text(frontmatter.dumps(post), encoding="utf-8")
+                
+                # ── v1.6.0: 同步到向量存储（锁外异步）
+                self._sync_to_vector_store(entry)
                 
                 return entry
                 
@@ -469,20 +503,30 @@ class LTMManager:
         query: str,
         category: str | None = None,
         max_results: int = 20,
+        use_weight: bool = True,
+        use_semantic: bool = False,
+        semantic_weight: float = 0.6,
     ) -> list[LTMEntry]:
         """
         BM25-powered search across all memory entries.
         Uses BM25Okapi when rank-bm25 is installed; falls back to keyword scoring.
+        Optionally applies MemoryWeight boost so high-importance entries rank higher.
+        Supports semantic search (v1.6.0) via sentence-transformers + ChromaDB.
 
         BM25 相关性搜索（已安装 rank-bm25 时自动启用，否则降级为关键词评分）。
+        支持权重加成：高重要性条目在相关性相近时优先排序。
+        支持语义搜索（v1.6.0）：模糊查询、同义词理解。
 
         Args:
             query:       搜索关键词（大小写不敏感，支持中英文混合多词）。
             category:    可选，限制搜索分类。
             max_results: 最多返回条数。
+            use_weight:  是否应用 MemoryWeight 权重加成（默认 True）。
+            use_semantic: 是否启用语义搜索（默认 False）。
+            semantic_weight: 语义分数权重，0-1（默认 0.6）。
 
         Returns:
-            匹配的 LTMEntry 列表，按 BM25 相关性降序。
+            匹配的 LTMEntry 列表，按 BM25 相关性降序（可叠加权重加成）。
         """
         # 分片优化：有 category 时只扫描对应分片，没有时全量
         all_entries = self._load_shard(category) if category else self._load_entries()
@@ -490,10 +534,25 @@ class LTMManager:
         if not pool:
             return []
         if not query or not query.strip():
+            # 无查询词时：直接按权重返回（如果启用）
+            if use_weight:
+                return self._sort_by_weight(pool)[:max_results]
             return pool[:max_results]
+        
+        # ── v1.6.0: 语义搜索支持 ─────────────────────────────────────────────
+        if use_semantic and self._vector_store and self._vector_store.semantic_enabled:
+            return self._hybrid_search(
+                query=query,
+                pool=pool,
+                max_results=max_results,
+                use_weight=use_weight,
+                semantic_weight=semantic_weight,
+            )
 
         query_tokens = _tokenize(query)
         if not query_tokens:
+            if use_weight:
+                return self._sort_by_weight(pool)[:max_results]
             return pool[:max_results]
 
         keyword_scores = [
@@ -515,27 +574,47 @@ class LTMManager:
                 if any(_contains_query(tag, token) for tag in entry.tags for token in query_tokens):
                     scores[i] += 0.5
 
+            # ── 权重加成（v1.5.0）────────────────────────────────────────────
+            weight_multipliers = self._get_weight_multipliers(pool) if use_weight else None
 
-            combined: list[tuple[float, float, int, LTMEntry]] = []
+            combined: list[tuple[float, float, float, int, LTMEntry]] = []
             for i, entry in enumerate(pool):
                 bm25_score = max(float(scores[i]), 0.0)
                 keyword_score = keyword_scores[i]
-                total_score = bm25_score + keyword_score
+                relevance = bm25_score + keyword_score
+                # 权重乘数：1.0（无加成）到 1.4（CORE权重，+40%提升）
+                w_mult = weight_multipliers[i] if weight_multipliers else 1.0
+                total_score = relevance * w_mult
                 if total_score > 0:
-                    combined.append((total_score, bm25_score, keyword_score, entry))
+                    combined.append((total_score, bm25_score, keyword_score, i, entry))
 
             combined.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
-            return [entry for _, _, _, entry in combined[:max_results]]
+            return [entry for _, _, _, _, entry in combined[:max_results]]
 
         # ── Fallback: multi-token keyword scoring ──────────────────────────────
 
-        results = [
-            (keyword_scores[i], pool[i])
-            for i in range(len(pool))
-            if keyword_scores[i] > 0
-        ]
+        weight_multipliers = self._get_weight_multipliers(pool) if use_weight else None
+        results = []
+        for i in range(len(pool)):
+            if keyword_scores[i] > 0:
+                w_mult = weight_multipliers[i] if weight_multipliers else 1.0
+                results.append((keyword_scores[i] * w_mult, pool[i]))
         results.sort(key=lambda x: x[0], reverse=True)
         return [e for _, e in results[:max_results]]
+
+    def recall(self, query: str, max_results: int = 20) -> list[LTMEntry]:
+        """
+        Recall memories matching the query.
+        这是 search() 的别名，保持 API 兼容性。
+
+        Args:
+            query:       搜索关键词。
+            max_results: 最多返回条数。
+
+        Returns:
+            匹配的 LTMEntry 列表。
+        """
+        return self.search(query=query, max_results=max_results)
 
 
     def update(
@@ -772,6 +851,175 @@ class LTMManager:
             score += 1
         return score
 
+    def _get_weight_multipliers(self, entries: list[LTMEntry]) -> list[float]:
+        """
+        返回每个条目的权重乘数（1.0 ~ 1.4），懒加载 MemoryWeight。
+        权重范围 1-5，对应乘数 1.0 / 1.1 / 1.2 / 1.3 / 1.4。
+        用于在 BM25/关键词分数上叠加重要性加成。
+
+        Args:
+            entries: LTMEntry 列表。
+
+        Returns:
+            与 entries 等长的 float 列表（乘数）。
+        """
+        try:
+            from core.weight import MemoryWeight
+            mw = MemoryWeight(self._memory_dir)
+            # 权重 1→1.0，2→1.1，3→1.2，4→1.3，5→1.4
+            return [1.0 + (mw.get_weight(e.id) - 1) * 0.1 for e in entries]
+        except Exception:
+            # MemoryWeight 不可用时降级：全部乘数为 1.0（不影响检索行为）
+            return [1.0] * len(entries)
+
+    def _sort_by_weight(self, entries: list[LTMEntry]) -> list[LTMEntry]:
+        """
+        无查询词时，仅按权重降序排列条目。
+        权重相同时保持原始顺序（stable sort）。
+
+        Args:
+            entries: LTMEntry 列表。
+
+        Returns:
+            按权重降序排列的 LTMEntry 列表。
+        """
+        try:
+            from core.weight import MemoryWeight
+            mw = MemoryWeight(self._memory_dir)
+            # stable sort：权重相同时保持原始顺序
+            return sorted(entries, key=lambda e: mw.get_weight(e.id), reverse=True)
+        except Exception:
+            return entries
+
+    def _sync_to_vector_store(self, entry: LTMEntry) -> None:
+        """
+        同步记忆条目到向量存储（v1.6.0）
+        
+        Args:
+            entry: LTMEntry 记忆条目
+        """
+        if not self._vector_store or not self._vector_store.semantic_enabled:
+            return
+        
+        import logging
+        _logger = logging.getLogger(__name__)
+        
+        try:
+            # 构建用于语义搜索的文本（内容 + 标签）
+            searchable_text = f"{entry.content} {' '.join(entry.tags)}"
+            
+            # 异步批量添加（加入缓存）
+            self._vector_store.add(
+                entry_id=entry.id,
+                content=searchable_text,
+                metadata={
+                    "category": entry.category,
+                    "tags": entry.tags,
+                    "source": entry.source,
+                    "timestamp": entry.created_at,
+                },
+                flush=False,  # 批量处理
+            )
+        except Exception as e:
+            _logger.warning(f"Failed to sync to vector store: {e}")
+            # 非阻塞错误，继续执行
+    
+    def flush_vector_store(self) -> None:
+        """刷新向量存储批量缓存（v1.6.0）"""
+        if self._vector_store and self._vector_store.semantic_enabled:
+            import logging
+            _logger = logging.getLogger(__name__)
+            try:
+                self._vector_store.flush()
+                _logger.debug("Vector store flushed")
+            except Exception as e:
+                _logger.warning(f"Failed to flush vector store: {e}")
+
+    def _hybrid_search(
+        self,
+        query: str,
+        pool: list[LTMEntry],
+        max_results: int,
+        use_weight: bool,
+        semantic_weight: float,
+    ) -> list[LTMEntry]:
+        """
+        混合检索：BM25 + 语义搜索融合（v1.6.0）
+        
+        Args:
+            query: 查询文本
+            pool: 候选条目池
+            max_results: 返回结果数
+            use_weight: 是否使用权重加成
+            semantic_weight: 语义分数权重
+            
+        Returns:
+            融合排序后的 LTMEntry 列表
+        """
+        # 1. 执行 BM25 搜索获取初步结果
+        query_tokens = _tokenize(query)
+        keyword_scores = [
+            sum(self._relevance_score(entry, tok) for tok in query_tokens)
+            for entry in pool
+        ]
+        
+        # 2. 构建 BM25 结果列表
+        bm25_results = []
+        if _BM25_AVAILABLE and len(pool) >= 1:
+            corpus = [
+                _tokenize(f"{e.content} {' '.join(e.tags)} {e.category}")
+                for e in pool
+            ]
+            bm25 = _BM25Okapi(corpus)
+            scores = bm25.get_scores(query_tokens)
+            
+            for i, entry in enumerate(pool):
+                if scores[i] > 0 or keyword_scores[i] > 0:
+                    bm25_results.append({
+                        "id": entry.id,
+                        "score": float(scores[i]) + keyword_scores[i],
+                        "content": entry.content,
+                        "metadata": {"entry": entry},
+                    })
+        else:
+            # Fallback
+            for i, entry in enumerate(pool):
+                if keyword_scores[i] > 0:
+                    bm25_results.append({
+                        "id": entry.id,
+                        "score": keyword_scores[i],
+                        "content": entry.content,
+                        "metadata": {"entry": entry},
+                    })
+        
+        # 3. 语义搜索融合
+        hybrid_results = self._vector_store.hybrid_search(
+            query=query,
+            bm25_results=bm25_results,
+            top_k=max_results,
+            semantic_weight=semantic_weight,
+        )
+        
+        # 4. 提取条目并应用权重加成
+        result_entries = []
+        for r in hybrid_results:
+            entry = r.metadata.get("entry") if r.metadata else None
+            if entry:
+                result_entries.append((r.score, entry))
+        
+        # 5. 应用 MemoryWeight 加成
+        if use_weight:
+            weight_multipliers = self._get_weight_multipliers([e for _, e in result_entries])
+            boosted = []
+            for i, (score, entry) in enumerate(result_entries):
+                w_mult = weight_multipliers[i] if weight_multipliers else 1.0
+                boosted.append((score * w_mult, entry))
+            result_entries = boosted
+        
+        # 6. 排序返回
+        result_entries.sort(key=lambda x: x[0], reverse=True)
+        return [entry for _, entry in result_entries[:max_results]]
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -805,6 +1053,7 @@ def _dict_to_entry(d: dict) -> LTMEntry:
         updated_at=d.get("updated_at", _now_iso()),
         sensitive=d.get("sensitive", False),
         encrypted_ref=d.get("encrypted_ref"),
+        similar_to=d.get("similar_to"),  # 支持读取 similar_to 字段
     )
 
 

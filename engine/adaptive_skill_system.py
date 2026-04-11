@@ -1,11 +1,44 @@
 """
 自适应 Skill 系统 - 核心执行引擎
+
+⚠️⚠️⚠️ BETA / 实验性功能 ⚠️⚠️⚠️
+
+当前版本的执行器是**占位符实现**，仅用于概念验证：
+- `_execute_framework_step()` 方法：仅返回文本拼接结果
+- `_execute_memory_step()` 方法：仅返回文本拼接结果
+- 没有真正的 LLM 调用或实际执行逻辑
+
+这意味着：
+- Layer 1/2/3 自适应学习流程是**模拟的**
+- "进化"和"学习"功能**尚未实现**
+- 不建议在生产环境中依赖此模块
+
+如需完整功能，请：
+1. 集成真正的执行引擎（如 LLM API 调用）
+2. 或等待后续版本更新
+
+版本 DAG + 进化血缘追踪（借鉴 OpenSpace 三种进化模式）
+
+这是 AI Memory System 项目的一部分，作为独立的研究模块存在。
+
+功能状态：
+┌─────────────────────────────────────────────────────────────────┐
+│ 功能模块                    │ 状态         │ 备注              │
+├─────────────────────────────────────────────────────────────────┤
+│ Skill 定义和版本 DAG        │ ✅ 已实现    │ 完整的版本追踪    │
+│ 进化类型枚举                │ ✅ 已实现    │ FIX/DERIVED/etc   │
+│ 执行器 (_execute_*_step)    │ ⚠️ 占位符   │ 仅文本拼接        │
+│ CAPTURED 自动应用           │ ⚠️ 降级     │ 需要人工确认      │
+│ 质量评估                    │ ⚠️ 简化版   │ 仅启发式规则      │
+└─────────────────────────────────────────────────────────────────┘
 """
 
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+import copy
+import difflib
 import json
 
 
@@ -22,6 +55,61 @@ class SkillType(Enum):
     MANUAL = "manual"
     COMPOSED = "composed"
     AUTO_GENERATED = "auto-generated"
+
+
+class EvolutionType(Enum):
+    """
+    Skill 进化类型（借鉴 OpenSpace 三模式）
+    - FIX:           执行出错后修复，纠错型进化
+    - DERIVED:       在成功的基础上扩展，衍生型进化
+    - CAPTURED:      从执行过程中提炼的最佳实践，捕获型进化
+    - USER_FEEDBACK: 用户主动反馈触发，向下兼容旧接口，适用于非自动识别场景
+    """
+    FIX = "fix"
+    DERIVED = "derived"
+    CAPTURED = "captured"
+    USER_FEEDBACK = "user_feedback"  # 原有：用户主动反馈触发
+
+
+@dataclass
+class VersionNode:
+    """
+    版本 DAG 中的单个节点
+    记录一次进化的完整血缘信息
+    """
+    version: str
+    parent_version: Optional[str]          # 父版本号，根节点为 None
+    evolution_type: Optional[str]          # EvolutionType.value
+    timestamp: str
+    reason: str
+    quality_before: float = 0.0            # 进化前质量分
+    quality_after: float = 0.0             # 进化后质量分
+    diff_summary: List[str] = field(default_factory=list)   # 变更的步骤摘要
+
+    def to_dict(self) -> Dict:
+        return {
+            "version": self.version,
+            "parent_version": self.parent_version,
+            "evolution_type": self.evolution_type,
+            "timestamp": self.timestamp,
+            "reason": self.reason,
+            "diff_summary": self.diff_summary,
+            "quality_before": self.quality_before,
+            "quality_after": self.quality_after,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "VersionNode":
+        return cls(
+            version=data["version"],
+            parent_version=data.get("parent_version"),
+            evolution_type=data.get("evolution_type"),
+            timestamp=data["timestamp"],
+            reason=data.get("reason", ""),
+            diff_summary=data.get("diff_summary", []),
+            quality_before=data.get("quality_before", 0.0),
+            quality_after=data.get("quality_after", 0.0),
+        )
 
 
 @dataclass
@@ -43,6 +131,20 @@ class SkillStep:
             "customization": self.customization,
             "estimated_duration": self.estimated_duration
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "SkillStep":
+        """[P2-03 新增] 从 dict 快照重建 SkillStep，用于 rollback_to 步骤恢复"""
+        return cls(
+            step_number=data.get("step", 0),
+            name=data.get("name", ""),
+            description=data.get("description", ""),
+            source=data.get("source", "框架"),
+            customization=data.get("customization"),
+            estimated_duration=data.get("estimated_duration"),
+        )
+
+
 
 
 @dataclass
@@ -122,8 +224,15 @@ class Skill:
     generation_info: GenerationInfo
     quality_metrics: QualityMetrics
     
-    # 版本历史
+    # 版本历史（旧格式，保留兼容）
     versions: Dict[str, Dict] = field(default_factory=dict)
+
+    # ── 版本 DAG（新增）─────────────────────────────────
+    # 每个 key 是版本号，value 是 VersionNode.to_dict()
+    version_dag: Dict[str, Dict] = field(default_factory=dict)
+    # 当前版本的直接父版本（快捷字段，避免每次遍历 DAG）
+    derived_from: Optional[str] = None
+    # ────────────────────────────────────────────────────
     
     def to_dict(self) -> Dict:
         """转换为字典（用于存储）"""
@@ -140,7 +249,9 @@ class Skill:
             "metadata": self.metadata.to_dict(),
             "generation_info": self.generation_info.to_dict(),
             "quality_metrics": self.quality_metrics.to_dict(),
-            "versions": self.versions
+            "versions": self.versions,
+            "version_dag": self.version_dag,
+            "derived_from": self.derived_from,
         }
     
     @classmethod
@@ -196,8 +307,51 @@ class Skill:
             metadata=metadata,
             generation_info=generation_info,
             quality_metrics=quality_metrics,
-            versions=data.get('versions', {})
+            versions=data.get('versions', {}),
+            version_dag=data.get('version_dag', {}),
+            derived_from=data.get('derived_from'),
         )
+
+    def get_evolution_chain(self) -> List[str]:
+        """
+        返回当前版本的完整进化链（从初始版本到当前版本）
+        示例：["1.0", "1.1", "2.0"]
+        """
+        chain = []
+        current = self.version
+        visited = set()
+        while current and current not in visited:
+            chain.append(current)
+            visited.add(current)
+            node = self.version_dag.get(current)
+            if not node:
+                break
+            current = node.get("parent_version")
+        chain.reverse()
+        return chain
+
+    def rollback_to(self, target_version: str) -> bool:
+        """
+        [P2-03 修复] 完整回滚到目标版本：同时恢复 version 指针和步骤内容。
+        步骤内容从 versions[target_version]['steps_snapshot'] 恢复。
+        如果目标版本没有步骤快照（如初始根节点），仅更新版本号并发出警告。
+
+        Returns True if target version exists in DAG.
+        """
+        if target_version not in self.version_dag:
+            return False
+
+        self.metadata.updated_at = datetime.now()
+        self.metadata.update_reason = f"Rollback to {target_version}"
+        self.version = target_version
+
+        # 恢复步骤内容快照（由 _update_skill 在 versions 中保存）
+        snapshot = self.versions.get(target_version, {}).get("steps_snapshot")
+        if snapshot is not None:
+            self.steps = [SkillStep.from_dict(s) for s in snapshot]
+        # 若无快照（根节点），版本号已更新，步骤保持不变——此情况极少，
+        # 后续可通过 versions 写入根节点快照来彻底消除此边界。
+        return True
 
 
 @dataclass
@@ -346,10 +500,13 @@ class SkillExecutor:
     def _execute_framework_step(self, step: SkillStep, problem: str,
                                inputs: Optional[Dict], previous_outputs: List) -> Any:
         """
-        执行基于框架的步骤。
+        执行基于框架的步骤（占位符实现）。
         
         框架步骤代表通用方法论（如「收集数据」「分析趋势」「制定策略」），
         执行结果包含：步骤描述、从问题中提取的关键信息、自定义说明。
+        
+        注意：这是占位符实现，仅拼接文本描述，不执行实际逻辑。
+        如需真正的执行能力，需要集成外部工具调用或 AI 模型。
         """
         # 从前一步骤的输出中聚合上下文
         context_summary = ""
@@ -484,10 +641,23 @@ class AdaptiveSkillSystem:
         
         # 创建记忆客户端
         if memory_dir:
-            from .memory_system_client import MemorySystemClient
-            self.memory_client = MemorySystemClient(memory_dir)
-            self.kb = self.memory_client.kb
-            self.ltm = self.memory_client.ltm
+            try:
+                from memory_system_client import MemorySystemClient
+                self.memory_client = MemorySystemClient(memory_dir)
+                self.kb = self.memory_client.kb
+                self.ltm = self.memory_client.ltm
+            except ImportError:
+                # 兼容相对导入
+                try:
+                    from .memory_system_client import MemorySystemClient
+                    self.memory_client = MemorySystemClient(memory_dir)
+                    self.kb = self.memory_client.kb
+                    self.ltm = self.memory_client.ltm
+                except ImportError:
+                    # 没有可用客户端，使用传入的客户端
+                    self.memory_client = None
+                    self.kb = kb_client
+                    self.ltm = ltm_client
         else:
             self.memory_client = None
             self.kb = kb_client
@@ -538,6 +708,14 @@ class AdaptiveSkillSystem:
             print("[Layer 1] 搜索已有 Skill...")
         result_1, skill_1 = self._try_layer_1(problem)
         if result_1:
+            # post-execution 分析钩子
+            if skill_1:
+                suggestion = self.post_execution_analyze(skill_1, result_1, problem)
+                if suggestion and suggestion.get("auto_apply"):
+                    if suggestion["action"] == "captured":
+                        self.evolve_captured(skill_1.skill_id,
+                                             suggestion["best_practice"],
+                                             suggestion.get("quality_score", 0.0))
             return SolveResponse(
                 result=result_1.output,
                 skill_used=skill_1,
@@ -691,11 +869,36 @@ class AdaptiveSkillSystem:
         skill_text = f"{skill.name} {skill.description} {' '.join(skill.required_inputs)} {' '.join(skill.outputs)}".lower()
         overlap = sum(1 for kw in keywords if kw in skill_text)
         return overlap / max(len(keywords), 1)
-    
+
+    @staticmethod
+    def _normalize_version(version: str) -> str:
+        """
+        [P3-03 新增] 统一版本号格式为 major.minor。
+        处理常见的非标准输入：
+          - 去掉 "v" 前缀（如 "v1.0" → "1.0"）
+          - 截取前两段（如 "1.0.0" → "1.0"）
+          - beta / rc 后缀（如 "1.0-beta"）取连字符前的数字部分
+
+        Returns:
+            规范化后的 "major.minor" 字符串
+        """
+        v = version.strip().lstrip("vV")
+        v = v.split("-")[0].split("+")[0]          # 去掉 beta / rc 后缀
+        parts = v.split(".")
+        try:
+            major = int(parts[0]) if parts else 1
+            minor = int(parts[1]) if len(parts) > 1 else 0
+        except ValueError:
+            major, minor = 1, 0
+        return f"{major}.{minor}"
+
     def _skill_from_kb_entry(self, entry: Dict) -> "Skill":
         """将 KB 条目包装成轻量 Skill，用于 Layer 1 执行"""
-        skill_id = entry.get("id", f"kb_{hash(entry.get('title',''))}")
+        # [P4-03 修复] 使用 hashlib.md5 代替内置 hash()，确保跨 session / 跨 Python
+        # 版本的 ID 稳定性（内置 hash() 每次运行结果不同）。
+        import hashlib
         title = entry.get("title", "KB Skill")
+        skill_id = entry.get("id") or f"kb_{hashlib.md5(title.encode('utf-8', errors='replace')).hexdigest()[:8]}"
         content = entry.get("content", "")
         
         # 将 KB 内容摘要转换为步骤
@@ -832,6 +1035,270 @@ class AdaptiveSkillSystem:
             "generation_info": skill_draft.to_dict()
         }
     
+    # ══════════════════════════════════════════════════════════
+    # 版本 DAG — 三种进化触发入口（借鉴 OpenSpace）
+    # ══════════════════════════════════════════════════════════
+
+    def evolve_fix(self, skill_id: str, error_message: str,
+                   fix_description: str) -> Optional[Skill]:
+        """
+        FIX 进化：执行出错后修复
+        典型场景：Skill 某步骤失败，自动或手动描述修复方案，触发版本更新。
+
+        Args:
+            skill_id:       要修复的 Skill ID
+            error_message:  失败的错误信息
+            fix_description: 修复方案描述
+
+        Returns:
+            更新后的 Skill，失败返回 None
+        """
+        skill = self._get_skill(skill_id)
+        if not skill:
+            return None
+
+        feedback_analysis = {
+            "sentiment": "negative",
+            "aspect": "error",
+            "suggestion": f"[FIX] {fix_description}（原因: {error_message[:100]}）",
+            "positive_signals": 0,
+            "negative_signals": 1,
+        }
+        quality_before = skill.quality_metrics.success_rate
+        old_version = skill.version  # [P2-02 修复] 在 _update_skill 前取版本号，避免使用可能为 None 的 derived_from
+        updated = self._update_skill(skill, feedback_analysis,
+                                     evolution_type=EvolutionType.FIX,
+                                     quality_before=quality_before)
+        self._save_skill(updated)
+
+        if self.ltm:
+            self.ltm.save({
+                "content": f"[FIX] Skill '{updated.name}' v{old_version}→v{updated.version}: {fix_description}",
+                "category": "decision",
+                "tags": ["skill-evolution", "fix", skill_id]
+            })
+        return updated
+
+    def evolve_derived(self, skill_id: str, enhancement: str) -> Optional[Skill]:
+        """
+        DERIVED 进化：在成功基础上扩展，衍生增强版
+        典型场景：Skill 运行良好，但发现可以覆盖更多场景。
+
+        Args:
+            skill_id:    父 Skill ID
+            enhancement: 新增能力或扩展方向描述
+
+        Returns:
+            衍生出的新版本 Skill
+        """
+        skill = self._get_skill(skill_id)
+        if not skill:
+            return None
+
+        feedback_analysis = {
+            "sentiment": "positive",
+            "aspect": "enhancement",
+            "suggestion": f"[DERIVED] {enhancement}",
+            "positive_signals": 1,
+            "negative_signals": 0,
+        }
+        quality_before = skill.quality_metrics.success_rate
+        updated = self._update_skill(skill, feedback_analysis,
+                                     evolution_type=EvolutionType.DERIVED,
+                                     quality_before=quality_before)
+        self._save_skill(updated)
+
+        if self.ltm:
+            self.ltm.save({
+                "content": f"[DERIVED] Skill '{updated.name}' v{updated.derived_from}→v{updated.version}: {enhancement}",
+                "category": "project",
+                "tags": ["skill-evolution", "derived", skill_id]
+            })
+        return updated
+
+    def evolve_captured(self, skill_id: str, best_practice: str,
+                        quality_score: float = 0.0) -> Optional[Skill]:
+        """
+        CAPTURED 进化：从执行过程中提炼最佳实践，固化到 Skill
+        典型场景：一次执行效果特别好，把成功模式提炼写入 Skill。
+
+        Args:
+            skill_id:      要更新的 Skill ID
+            best_practice: 提炼出的最佳实践描述
+            quality_score: 本次执行的质量分（0-1）
+
+        Returns:
+            更新后的 Skill
+        """
+        skill = self._get_skill(skill_id)
+        if not skill:
+            return None
+
+        feedback_analysis = {
+            "sentiment": "positive",
+            "aspect": "best_practice",
+            "suggestion": f"[CAPTURED] {best_practice}",
+            "positive_signals": 1,
+            "negative_signals": 0,
+        }
+        updated = self._update_skill(skill, feedback_analysis,
+                                     evolution_type=EvolutionType.CAPTURED,
+                                     quality_before=quality_score)
+        # 回填 quality_after
+        updated.version_dag[updated.version]["quality_after"] = quality_score
+        self._save_skill(updated)
+
+        if self.ltm:
+            self.ltm.save({
+                "content": f"[CAPTURED] Skill '{updated.name}' best practice: {best_practice}",
+                "category": "project",
+                "tags": ["skill-evolution", "captured", "best-practice", skill_id]
+            })
+        return updated
+
+    def post_execution_analyze(self, skill: Skill,
+                                execution_result: "ExecutionResult",
+                                problem: str) -> Optional[Dict]:
+        """
+        Post-execution 分析钩子（主动进化触发器）
+        每次 Skill 执行完毕后调用，自动判断是否需要进化。
+
+        触发规则：
+        - 执行失败                  → 建议 FIX 进化
+        - 成功且完成率 < 80%        → 建议 FIX 进化（部分失败）
+        - 成功且质量分 > 0.85       → 建议 CAPTURED 进化（固化最佳实践）
+        - 成功但 usage_count >= 5   → 建议 DERIVED 进化（成熟可扩展）
+
+        Returns:
+            建议字典 {"action": "fix"|"captured"|"derived"|"none",
+                      "reason": str, "auto_apply": bool}
+            或 None（无建议）
+        """
+        if not execution_result:
+            return None
+
+        metrics = skill.quality_metrics
+        completion_rate = (execution_result.steps_completed /
+                           max(execution_result.total_steps, 1))
+
+        # ── 失败路径 → FIX ────────────────────────────────
+        if not execution_result.success or completion_rate < 0.8:
+            error_msg = execution_result.error_message or "步骤未全部完成"
+            return {
+                "action": "fix",
+                "reason": error_msg,
+                "fix_description": f"执行'{problem[:40]}'时失败，完成率{completion_rate:.0%}",
+                "auto_apply": False,     # FIX 需要人工确认修复方案
+            }
+
+        # [P2-01 修复] 指标更新单独调用，与"分析"逻辑分离，
+        # 调用方如果只是查询建议而不打算提交，应自行选择是否调用此方法。
+        self._record_execution_success(skill)
+        metrics = skill.quality_metrics  # 取更新后的最新指标
+
+        # ── 高质量执行 → CAPTURED ─────────────────────────
+        # [P4-01 说明] CAPTURED 条件（success_rate >= 0.85）覆盖 DERIVED 条件（>= 0.70），
+        # 因此高质量时只触发 CAPTURED，DERIVED 仅在中等质量区间（0.70-0.85）或次数满足但
+        # 质量未达到 CAPTURED 阈值时被触发。这是有意设计：先固化最佳实践，再考虑扩展方向。
+        # P1-6 修复：CAPTURED 默认不自动应用，需要人工确认
+        # 原因：执行器是占位符，自动写入可能导致错误数据进入记忆库
+        if metrics.success_rate >= 0.85 and metrics.usage_count >= 3:
+            return {
+                "action": "captured",
+                "reason": f"连续高质量执行（成功率{metrics.success_rate:.0%}，执行{metrics.usage_count}次）",
+                "best_practice": f"在问题类型'{problem[:40]}'上稳定成功，固化当前步骤为最佳实践",
+                "quality_score": metrics.success_rate,
+                "auto_apply": False,     # P1-6 修复：改为 False，需要人工确认
+                "requires_human_approval": True,  # 新增：明确标记需要人工审批
+            }
+
+        # ── 成熟 Skill 有新场景 → DERIVED ─────────────────
+        if metrics.usage_count >= 5 and metrics.success_rate >= 0.70:
+            return {
+                "action": "derived",
+                "reason": f"Skill 已成熟（{metrics.usage_count}次执行，成功率{metrics.success_rate:.0%}），可考虑扩展场景",
+                "enhancement": f"基于'{problem[:40]}'的执行经验，扩展适用场景",
+                "auto_apply": False,     # DERIVED 需要用户确认扩展方向
+            }
+
+        return {"action": "none", "reason": "执行正常，暂无进化建议"}
+
+    def _record_execution_success(self, skill: "Skill") -> None:
+        """
+        [P2-01 新增] 记录一次成功执行，更新 quality_metrics 中的 usage_count 和 success_rate。
+        与 post_execution_analyze（纯分析/查询）分离，调用方可自主决定是否更新指标。
+
+        Algorithm:
+            success_rate 使用指数移动平均（alpha=0.2），偏向近期表现。
+        """
+        metrics = skill.quality_metrics
+        metrics.usage_count += 1
+        alpha = 0.2
+        metrics.success_rate = (1 - alpha) * metrics.success_rate + alpha * 1.0
+
+    def get_skill_evolution_report(self, skill_id: str) -> Optional[Dict]:
+        """
+        输出某个 Skill 的完整进化报告
+        包含：进化链、各版本质量变化、进化类型分布
+
+        Returns:
+            {
+              "skill_id": ...,
+              "current_version": ...,
+              "evolution_chain": [...],
+              "dag_nodes": [...],
+              "stats": {"total_evolutions": N, "fix": N, "derived": N, "captured": N}
+            }
+        """
+        skill = self._get_skill(skill_id)
+        if not skill:
+            return None
+
+        chain = skill.get_evolution_chain()
+        nodes = [skill.version_dag[v] for v in chain if v in skill.version_dag]
+
+        # [P4-02 修复] 动态从 EvolutionType 枚举生成 stats 键，
+        # 后续新增枚举值时无需手动同步此字典。
+        stats: Dict[str, int] = {"total_evolutions": len(nodes) - 1,
+                                 **{e.value: 0 for e in EvolutionType}}
+        for node in nodes[1:]:   # 跳过根节点
+            etype = node.get("evolution_type", "")
+            if etype in stats:
+                stats[etype] += 1
+
+        return {
+            "skill_id": skill_id,
+            "name": skill.name,
+            "current_version": skill.version,
+            "derived_from": skill.derived_from,
+            "evolution_chain": chain,
+            "dag_nodes": nodes,
+            "stats": stats,
+        }
+
+    # ══════════════════════════════════════════════════════════
+    # 内部工具方法
+    # ══════════════════════════════════════════════════════════
+
+    def _get_skill(self, skill_id: str) -> Optional[Skill]:
+        """从缓存或 KB 获取 Skill"""
+        skill = self.skills_cache.get(skill_id)
+        if not skill and self.kb:
+            try:
+                skill = self.kb.get(skill_id)
+            except Exception:
+                pass
+        return skill
+
+    def _save_skill(self, skill: Skill) -> None:
+        """将 Skill 写回缓存和 KB"""
+        self.skills_cache[skill.skill_id] = skill
+        if self.kb:
+            try:
+                self.kb.update(skill.skill_id, skill)
+            except Exception:
+                pass
+
     def update_skill_from_feedback(self, skill_id: str, feedback: str) -> Skill:
         """
         根据用户反馈更新 Skill
@@ -931,26 +1398,88 @@ class AdaptiveSkillSystem:
             "negative_signals": neg_count
         }
     
-    def _update_skill(self, skill: Skill, feedback_analysis: Dict) -> Skill:
-        """根据反馈更新 Skill"""
-        # 更新元数据
-        skill.metadata.updated_at = datetime.now()
-        skill.metadata.update_reason = feedback_analysis["suggestion"]
-        skill.metadata.last_challenged_at = datetime.now()
-        
-        # 更新版本
-        old_version = skill.version
-        major, minor = map(int, old_version.split('.')[:2])
+    def _update_skill(self, skill: Skill, feedback_analysis: Dict,
+                      evolution_type: EvolutionType = EvolutionType.USER_FEEDBACK,
+                      quality_before: float = 0.0) -> Skill:
+        """
+        根据反馈更新 Skill，记录版本 DAG 血缘信息
+
+        Args:
+            skill:            待更新的 Skill（会被 deepcopy，原对象不变）
+            feedback_analysis: _analyze_feedback 返回的分析结果
+            evolution_type:   进化类型（FIX / DERIVED / CAPTURED / USER_FEEDBACK）
+            quality_before:   进化前的质量分（0-1），用于 DAG 记录
+
+        Returns:
+            更新后的新 Skill（新版本号，血缘已记录）
+        """
+        # [P1 修复] 对传入对象做 deepcopy，所有修改只作用在副本上，原对象保持不变。
+        # 原代码错误地把 deepcopy 赋给 old_skill（备份），然后直接修改传入的 skill，
+        # 导致调用方持有的引用在函数返回前就已被悄悄改变。
+        new_skill = copy.deepcopy(skill)       # 副本：将在此基础上产生新版本
+        old_version = skill.version            # 从原始对象取版本号
+
+        # ── 1. 更新元数据 ─────────────────────────────────
+        new_skill.metadata.updated_at = datetime.now()
+        new_skill.metadata.update_reason = feedback_analysis["suggestion"]
+        new_skill.metadata.last_challenged_at = datetime.now()
+
+        # ── 2. 版本号递增（调用统一规范化方法） ──────────
+        normalized_old = self._normalize_version(old_version)  # [P3 修复] 版本号规范化
+        parts = normalized_old.split(".")
+        try:
+            major, minor = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        except ValueError:
+            major, minor = 1, 0
         minor += 1
-        skill.version = f"{major}.{minor}"
-        
-        # 记录到版本历史
-        skill.versions[old_version] = {
+        new_version = f"{major}.{minor}"
+        new_skill.version = new_version
+
+        # ── 3. diff-based 步骤变更摘要 ────────────────────
+        old_step_texts = [f"[{s.step_number}] {s.name}: {s.description}" for s in skill.steps]
+        new_step_texts = [f"[{s.step_number}] {s.name}: {s.description}" for s in new_skill.steps]
+        diff_lines = list(difflib.unified_diff(
+            old_step_texts, new_step_texts,
+            fromfile=f"v{old_version}", tofile=f"v{new_version}",
+            lineterm=""
+        ))
+        diff_summary = [l for l in diff_lines if l.startswith(("+", "-")) and not l.startswith(("+++", "---"))]
+
+        # ── 4. 写入版本 DAG ───────────────────────────────
+        dag_node = VersionNode(
+            version=new_version,
+            parent_version=old_version,
+            evolution_type=evolution_type.value,
+            timestamp=datetime.now().isoformat(),
+            reason=feedback_analysis["suggestion"],
+            diff_summary=diff_summary[:10],   # 最多保留10条 diff 行
+            quality_before=quality_before,
+            quality_after=0.0,                # 执行后由 post_execution_analyze 回填
+        )
+        new_skill.version_dag[new_version] = dag_node.to_dict()
+
+        # 同时写入 DAG 中根节点（如果是第一次进化，补写根节点）
+        if old_version not in new_skill.version_dag:
+            root_node = VersionNode(
+                version=old_version,
+                parent_version=None,
+                evolution_type=None,
+                timestamp=skill.metadata.created_at.isoformat(),
+                reason="initial",
+            )
+            new_skill.version_dag[old_version] = root_node.to_dict()
+
+        # ── 5. 更新 derived_from 指针 ─────────────────────
+        new_skill.derived_from = old_version
+
+        # ── 6. 兼容旧格式 versions ────────────────────────
+        new_skill.versions[old_version] = {
             "timestamp": datetime.now().isoformat(),
-            "reason": feedback_analysis["suggestion"]
+            "reason": feedback_analysis["suggestion"],
+            "steps_snapshot": [s.to_dict() for s in skill.steps],
         }
-        
-        return skill
+
+        return new_skill
     
     def _skill_from_composition_plan(self, composition_plan: Any, problem: str) -> Skill:
         """从组合计划创建 Skill"""

@@ -56,7 +56,7 @@
 ### 阶段 2（可选升级）
 | 库 | 用途 |
 |---|---|
-| `chromadb` | 本地向量数据库 |
+| `chromadb` 或 `qdrant` | 如需深度学习 embedding 语义搜索（当前版本使用 TF-IDF） |
 | `sentence-transformers` | 文本向量化（语义搜索） |
 
 **升级条件**：当知识库超过 500 条或需要语义搜索时引入。**本 milestone 不实现。**

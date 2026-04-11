@@ -1,0 +1,72 @@
+# Encrypted Memory Store / 加密记忆存储
+# ══════════════════════════════════════
+# AI Memory System v1.0
+# ⚠️  SENSITIVE DATA — Keep this file secure
+# ⚠️  敏感数据 — 请妥善保管此文件
+# ══════════════════════════════════════
+#
+# HOW TO USE / 使用说明:
+# 1. Encrypted values are stored as base64 or AES-256 encrypted strings
+# 2. AI will display [ENCRYPTED] in responses when referencing these entries
+# 3. User must provide passphrase to decrypt and view actual values
+# 4. Never commit this file to public repositories
+#
+# 加密说明:
+# 1. 加密值以 base64 或 AES-256 加密字符串存储
+# 2. AI 在引用这些条目时会显示 [ENCRYPTED]
+# 3. 用户需要提供密码短语才能解密并查看实际值
+# 4. 请勿将此文件提交到公共代码仓库
+# ══════════════════════════════════════
+
+{
+  "version": "1.0",
+  "encryption": "AES-256-GCM",
+  "created": "",
+  "last_modified": "",
+  "entries": []
+}
+
+# ══════════════════════════════════════
+# ENTRY FORMAT / 条目格式:
+# ══════════════════════════════════════
+#
+# {
+#   "id": "unique-id",
+#   "key": "human-readable-name",
+#   "category": "password | api_key | personal_id | financial | medical | other",
+#   "encrypted_value": "base64-encoded-encrypted-string",
+#   "iv": "initialization-vector",
+#   "hint": "optional non-sensitive hint",
+#   "created": "YYYY-MM-DD",
+#   "last_accessed": "YYYY-MM-DD"
+# }
+#
+# ══════════════════════════════════════
+# SECURITY RECOMMENDATIONS / 安全建议:
+# ══════════════════════════════════════
+#
+# ✅ DO:
+#   - Store this file in a private, access-controlled location
+#   - Use a strong, unique passphrase (12+ chars, mixed)
+#   - Regularly rotate sensitive credentials
+#   - Keep a secure backup of your passphrase
+#   - Set file permissions to owner-only (chmod 600 on Unix)
+#
+# ❌ DON'T:
+#   - Share this file or its contents
+#   - Commit to git (add to .gitignore)
+#   - Store passphrase in the same location
+#   - Use simple passphrases
+#
+# 安全建议:
+# ✅ 应该:
+#   - 将此文件存储在私有的访问受控位置
+#   - 使用强密码短语（12+ 字符，混合大小写+数字+符号）
+#   - 定期轮换敏感凭证
+#   - 安全备份密码短语
+#
+# ❌ 不应该:
+#   - 共享此文件或其内容
+#   - 提交到 git（加入 .gitignore）
+#   - 将密码短语存储在相同位置
+# ══════════════════════════════════════

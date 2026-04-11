@@ -7,6 +7,78 @@
 
 ---
 
+## [1.6.0] - 2026-04-12
+
+### 新增 / Added
+
+#### 语义搜索（Semantic Search）
+- ✅ 集成 `sentence-transformers` + `ChromaDB`，支持基于向量的语义检索
+- ✅ 默认模型：`all-MiniLM-L6-v2`（384 维，约 80MB，多语言支持）
+- ✅ 支持中文语义理解，同义词、近义词召回
+
+#### 混合检索（Hybrid Search）
+- ✅ BM25 关键词匹配 + 语义搜索加权融合
+- ✅ 默认语义权重 `semantic_weight=0.6`，可通过参数调整
+- ✅ 分数归一化：BM25 min-max 归一化 + 语义余弦相似度（天然 0-1）
+- ✅ 融合公式：`score = bm25 * (1-w) + semantic * w`
+
+#### 自动降级机制
+- ✅ 语义搜索依赖缺失或网络不通时，自动回退到纯 BM25
+- ✅ 模型下载失败时静默降级，不影响系统可用性
+- ✅ 降级日志提示，便于问题排查
+
+### 改进 / Improved
+
+#### 文档更新
+- README 新增语义搜索配置指南（含国内镜像配置）
+- README 新增混合检索参数说明
+- README 特性列表新增「混合检索」和「自动降级」
+
+### 测试 / Tests
+- ✅ 回归测试 18/18 全绿
+- ✅ 降级机制验证通过（网络不通时自动回退 BM25）
+- ✅ 语义搜索功能验证通过
+
+---
+
+## [1.5.0] - 2026-04-10
+
+### 修复 / Fixed
+
+#### search() 方法结构 Bug（严重）
+- ✅ **BUG FIX**: `core/ltm.py` 的 `search()` 方法存在严重结构性错误：`recall()` 方法定义被错误地嵌入 `search()` 方法体内，导致 `search()` 的 BM25 + 关键词评分主体逻辑（约 40 行代码）变成悬空代码，永远不会被执行。具体表现：非空 query 调用 `search()` 时隐式返回 `None` 而非列表，而非空 query 以外的情况（如空字符串）则直接跳过所有匹配逻辑。
+- ✅ 修复后 `search()` 正确执行 BM25 + 关键词混合评分，`recall()` 恢复为独立方法（`search()` 的别名）
+- ✅ `core/ltm_wal.py` 同步修复并增强 `search()` 方法（WAL 路径的检索与 ltm.py 保持完全一致）
+
+### 新增 / Added
+
+#### WAL 正式接入 MCP Server（核心性能升级落地）
+- ✅ `mcp_server.py` 将 `LTMManager` 替换为 `LTMManagerWAL`：所有 MCP 工具（`memory_save` / `memory_recall` 等）现在走 WAL 增量写入路径
+- ✅ API 100% 向后兼容，用户无感知升级，WAL 不可用时自动回退
+- ✅ 写入性能：O(1) 追加，较原来 O(n) 全文重写提升约 **2.7x**（1.16s → 0.44s，基于 v1.4.1 性能测试基线）
+
+#### 权重系统集成到检索核心
+- ✅ `ltm.py` `search()` 新增 `use_weight: bool = True` 参数，支持权重加成模式
+- ✅ 新增 `_get_weight_multipliers(entries)` 辅助方法：懒加载 `MemoryWeight`，将条目权重（1-5）转换为相关性乘数（1.0~1.4），权重越高检索排名越前
+- ✅ 新增 `_sort_by_weight(entries)` 辅助方法：无查询词时直接按权重降序返回条目
+- ✅ `ltm_wal.py` 同步集成权重系统，WAL 路径与非 WAL 路径行为一致
+- ✅ 权重集成对 `MemoryWeight` 不可用（未安装/异常）的情况做了优雅降级，乘数全部为 1.0，不影响原有检索行为
+
+#### 权重迁移工具
+- ✅ 新增 `engine/migrate_weights.py`：为现有 LTM 条目批量分配权重
+  - 基于 `MemoryWeight.auto_suggest_weight()` 规则（category + 关键词组合打分）
+  - 支持 `--dry-run` / `--force` / `--show-stats` / `--json` 参数
+  - 已有手动权重的条目默认跳过（`--force` 强制覆盖）
+  - 测试验证：28 条现有 LTM 条目，`preference` → 3（HIGH），`decision` → 3（HIGH），`project` → 2（MEDIUM）
+
+### 测试 / Tests
+- ✅ 全量测试 3/3 全部通过：`verify.py` 18/18、`verify_fix.py` 8/8、`verify_mcp_tools.py` 22/22
+- ✅ 新增 `engine/run_full_tests_v2.py`：全量测试运行器（subprocess 模式，独立进程隔离）
+
+---
+
+
+
 ## [1.4.0] - 2026-03-26
 
 ### 新增 / Added

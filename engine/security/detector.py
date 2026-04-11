@@ -36,6 +36,14 @@ class SensitiveCategory(str, Enum):
     BANK_CARD     = "bank_card"       # 银行卡号
     PRIVATE_KEY   = "private_key"     # PEM 私钥
     ACCESS_TOKEN  = "access_token"    # Bearer token 等
+    SECRET        = "secret"          # Generic secrets
+    CREDIT_CARD   = "credit_card"     # 信用卡号
+    PHONE_NUMBER  = "phone_number"    # 手机号
+    EMAIL_PASSWORD = "email_password" # 邮箱密码组合
+    DATABASE_URL  = "database_url"    # 数据库连接字符串
+    JWT_TOKEN     = "jwt_token"       # JWT tokens
+    AWS_KEY       = "aws_key"         # AWS credentials
+    GITHUB_TOKEN  = "github_token"    # GitHub tokens
 
 
 @dataclass
@@ -59,10 +67,11 @@ class ScanResult:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Pattern Definitions
+# Pattern Definitions (v1.5.1 - Extended to 20+ patterns)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PATTERNS: list[dict] = [
+    # ── API Keys ───────────────────────────────────────────────────────────────
     {
         "name": "openai_api_key",
         "category": SensitiveCategory.API_KEY,
@@ -70,9 +79,20 @@ _PATTERNS: list[dict] = [
         "redact_template": "[API_KEY:sk-***]",
     },
     {
+        "name": "openai_project_key",
+        "category": SensitiveCategory.API_KEY,
+        "regex": re.compile(r"\bsk-proj-[a-zA-Z0-9_-]{20,}\b"),
+        "redact_template": "[API_KEY:sk-proj-***]",
+    },
+    {
+        "name": "anthropic_api_key",
+        "category": SensitiveCategory.API_KEY,
+        "regex": re.compile(r"\bsk-ant-api[0-9]*-[a-zA-Z0-9_\-]{20,}\b"),
+        "redact_template": "[API_KEY:sk-ant-***]",
+    },
+    {
         "name": "generic_api_key",
         "category": SensitiveCategory.API_KEY,
-        # 匹配 key=VALUE 或 api_key: VALUE 等形式，VALUE 至少 16 个非空白字符
         "regex": re.compile(
             r"(?i)(?:api[_\-]?key|access[_\-]?key|secret[_\-]?key)"
             r"\s*[:=]\s*([a-zA-Z0-9._\-]{16,})"
@@ -80,43 +100,151 @@ _PATTERNS: list[dict] = [
         "redact_template": "[API_KEY:***]",
     },
     {
+        "name": "api_key_hex",
+        "category": SensitiveCategory.API_KEY,
+        "regex": re.compile(r"\b[a-f0-9]{32,64}\b"),
+        "redact_template": "[API_KEY:***]",
+        "context_check": True,
+    },
+
+    # ── AWS Credentials ───────────────────────────────────────────────────────
+    {
+        "name": "aws_access_key",
+        "category": SensitiveCategory.AWS_KEY,
+        "regex": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+        "redact_template": "[AWS_KEY:AKIA***]",
+    },
+    {
+        "name": "aws_secret_key",
+        "category": SensitiveCategory.AWS_KEY,
+        "regex": re.compile(
+            r"(?i)(?:aws[_\-]?secret[_\-]?access[_\-]?key|aws_secret)"
+            r"\s*[:=]\s*([a-zA-Z0-9/+=]{40})"
+        ),
+        "redact_template": "[AWS_SECRET:***]",
+    },
+
+    # ── GitHub Tokens ───────────────────────────────────────────────────────────
+    {
+        "name": "github_token",
+        "category": SensitiveCategory.GITHUB_TOKEN,
+        "regex": re.compile(r"\bgh[pousr]_[a-zA-Z0-9]{36,}\b"),
+        "redact_template": "[GITHUB_TOKEN:***]",
+    },
+    {
+        "name": "github_classic_token",
+        "category": SensitiveCategory.GITHUB_TOKEN,
+        "regex": re.compile(r"\b[0-9a-f]{40}\b"),
+        "redact_template": "[GITHUB_TOKEN:***]",
+        "context_check": True,
+    },
+
+    # ── Access Tokens ───────────────────────────────────────────────────────────
+    {
         "name": "bearer_token",
         "category": SensitiveCategory.ACCESS_TOKEN,
         "regex": re.compile(r"(?i)Bearer\s+[a-zA-Z0-9._\-]{20,}"),
         "redact_template": "[TOKEN:Bearer ***]",
     },
     {
+        "name": "jwt_token",
+        "category": SensitiveCategory.JWT_TOKEN,
+        "regex": re.compile(r"\beyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\b"),
+        "redact_template": "[JWT:***]",
+    },
+    {
+        "name": "basic_auth",
+        "category": SensitiveCategory.ACCESS_TOKEN,
+        "regex": re.compile(r"(?i)Basic\s+[a-zA-Z0-9+/=]{20,}"),
+        "redact_template": "[AUTH:Basic ***]",
+    },
+
+    # ── Passwords & Secrets ────────────────────────────────────────────────────
+    {
         "name": "password_assignment",
         "category": SensitiveCategory.PASSWORD,
-        # 匹配 password: VALUE 或 密码: VALUE
         "regex": re.compile(
-            r"(?i)(?:password|passwd|密码|口令)\s*[:：=]\s*(\S{4,})"
+            r"(?i)(?:password|passwd|密码|口令|pwd)\s*[:：=]\s*(\S{4,})"
         ),
         "redact_template": "[PASSWORD:***]",
     },
     {
+        "name": "secret_assignment",
+        "category": SensitiveCategory.SECRET,
+        "regex": re.compile(
+            r"(?i)(?:secret|密钥|秘钥|私钥)\s*[:：=]\s*([a-zA-Z0-9._\-]{8,})"
+        ),
+        "redact_template": "[SECRET:***]",
+    },
+
+    # ── PII (Personal Information) ───────────────────────────────────────────────
+    {
         "name": "chinese_national_id",
         "category": SensitiveCategory.NATIONAL_ID,
-        # 18 位中国大陆居民身份证号
         "regex": re.compile(
             r"\b[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])\d{2}\d{3}[\dXx]\b"
         ),
         "redact_template": "[ID:***]",
     },
     {
+        "name": "chinese_phone_number",
+        "category": SensitiveCategory.PHONE_NUMBER,
+        "regex": re.compile(r"\b1[3-9]\d{9}\b"),
+        "redact_template": "[PHONE:***]",
+    },
+    {
         "name": "bank_card",
         "category": SensitiveCategory.BANK_CARD,
-        # 16~19 位连续数字（排除纯年份等误报，要求前后无其他数字）
         "regex": re.compile(r"(?<!\d)\d{16,19}(?!\d)"),
         "redact_template": "[BANK_CARD:****]",
     },
     {
+        "name": "credit_card_luhn",
+        "category": SensitiveCategory.CREDIT_CARD,
+        "regex": re.compile(
+            r"\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|"
+            r"3(?:0[0-5]|[68][0-9])[0-9]{11}|6(?:011|5[0-9]{2})[0-9]{12})\b"
+        ),
+        "redact_template": "[CREDIT_CARD:****]",
+    },
+
+    # ── Private Keys ────────────────────────────────────────────────────────────
+    {
         "name": "pem_private_key",
         "category": SensitiveCategory.PRIVATE_KEY,
         "regex": re.compile(
-            r"-----BEGIN\s+(?:RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE KEY-----"
+            r"-----BEGIN\s+(?:RSA\s+|EC\s+|OPENSSH\s+|DSA\s+|PGP\s+)?PRIVATE KEY-----"
         ),
         "redact_template": "[PRIVATE_KEY:***]",
+    },
+    {
+        "name": "ssh_private_key",
+        "category": SensitiveCategory.PRIVATE_KEY,
+        "regex": re.compile(
+            r"-----BEGIN\s+OPENSSH\s+PRIVATE\s+KEY-----[\s\S]*?"
+            r"-----END\s+OPENSSH\s+PRIVATE\s+KEY-----"
+        ),
+        "redact_template": "[SSH_KEY:***]",
+    },
+
+    # ── Database URLs ───────────────────────────────────────────────────────────
+    {
+        "name": "database_url",
+        "category": SensitiveCategory.DATABASE_URL,
+        "regex": re.compile(
+            r"(?i)(?:mongodb|mysql|postgresql|postgres|redis|sqlite)://[^\s]+"
+        ),
+        "redact_template": "[DATABASE_URL:***]",
+    },
+
+    # ── Environment Variable Secrets ──────────────────────────────────────────
+    {
+        "name": "env_secret",
+        "category": SensitiveCategory.SECRET,
+        "regex": re.compile(
+            r"(?i)(?:export\s+)?(?:SECRET|TOKEN|KEY|PASSWORD)_[A-Z_]+\s*=\s*([a-zA-Z0-9._\-]{8,})"
+        ),
+        "redact_template": "[ENV_SECRET:***]",
     },
 ]
 

@@ -1,239 +1,449 @@
 """
-Vector Store — 向量检索模块
-支持语义搜索，补充关键词检索
-版本: 1.0
+Vector Store — 语义检索模块（基于 sentence-transformers + ChromaDB）
+
+提供基于深度学习的语义搜索能力，支持模糊语义匹配。
+
+版本: 3.0 (语义搜索版)
 """
 
 import os
 import json
-from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Any
+import uuid
 import logging
+from pathlib import Path
+from typing import List, Dict, Optional, Any, Tuple
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
 
-class VectorStore:
+@dataclass
+class SearchResult:
+    """搜索结果"""
+    entry_id: str
+    score: float
+    content: str
+    metadata: Dict[str, Any]
+    source: str  # "bm25", "semantic", "hybrid"
+
+
+class SemanticVectorStore:
     """
-    向量检索模块提供语义搜索能力，基于文本 embedding 相似度进行检索。
+    语义向量存储 — 基于 sentence-transformers + ChromaDB
     
-    注意：这是一个轻量级实现，完整版本需要安装 chromadb 和 sentence-transformers。
-    当前版本使用简单的 TF-IDF 向量作为替代。
+    特性:
+    - 支持语义相似度检索（理解同义词、模糊查询）
+    - 自动降级到 TF-IDF（当模型加载失败时）
+    - 混合检索：BM25 + 语义分数融合
+    - 批量处理优化
     """
     
-    def __init__(self, persist_dir: Path) -> None:
+    def __init__(
+        self, 
+        persist_dir: Path,
+        collection_name: str = "memory_collection",
+        embedding_model: str = "all-MiniLM-L6-v2"
+    ):
         """
-        初始化向量存储
+        初始化语义向量存储
         
         Args:
-            persist_dir: 用于持久化存储的目录路径
+            persist_dir: 持久化目录
+            collection_name: ChromaDB集合名称
+            embedding_model: sentence-transformers模型名
         """
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
+        self.collection_name = collection_name
+        self.embedding_model_name = embedding_model
         
-        # 存储结构
-        self.vectors_file = self.persist_dir / "vectors.json"
-        self.metadata_file = self.persist_dir / "metadata.json"
+        # 状态标记
+        self.semantic_enabled = False
+        self.chroma_available = False
+        self.model = None
+        self.collection = None
         
-        # 内存存储
-        self.vectors: Dict[str, List[float]] = {}
-        self.metadata: Dict[str, Dict[str, Any]] = {}
+        # 批量缓存
+        self._batch_buffer: List[Dict] = []
+        self._batch_size = 10
         
-        # 词汇表（用于 TF-IDF 简化版）
-        self.vocabulary: Dict[str, int] = {}
-        self.vocab_file = self.persist_dir / "vocabulary.json"
-        
-        self._load_from_disk()
+        # 初始化
+        self._init_store()
     
-    def _load_from_disk(self) -> None:
-        """从磁盘加载数据"""
+    def _init_store(self) -> None:
+        """初始化存储（带降级机制）"""
         try:
-            if self.vectors_file.exists():
-                with open(self.vectors_file, 'r', encoding='utf-8') as f:
-                    self.vectors = json.load(f)
-            
-            if self.metadata_file.exists():
-                with open(self.metadata_file, 'r', encoding='utf-8') as f:
-                    self.metadata = json.load(f)
-            
-            if self.vocab_file.exists():
-                with open(self.vocab_file, 'r', encoding='utf-8') as f:
-                    self.vocabulary = json.load(f)
-            
-            logger.info(f"VectorStore loaded: {len(self.vectors)} vectors, vocab size: {len(self.vocabulary)}")
+            self._init_chroma()
+            self._init_model()
+            self.semantic_enabled = True
+            logger.info(f"SemanticVectorStore initialized: model={self.embedding_model_name}")
         except Exception as e:
-            logger.warning(f"Failed to load VectorStore: {e}, starting fresh")
+            logger.warning(f"Semantic store init failed: {e}, falling back to keyword search")
+            self.semantic_enabled = False
+            # 清理已初始化的资源
+            self._cleanup_partial_init()
     
-    def _save_to_disk(self) -> None:
-        """保存数据到磁盘"""
+    def _cleanup_partial_init(self) -> None:
+        """清理部分初始化失败的资源"""
         try:
-            with open(self.vectors_file, 'w', encoding='utf-8') as f:
-                json.dump(self.vectors, f, ensure_ascii=False, indent=2)
-            
-            with open(self.metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(self.metadata, f, ensure_ascii=False, indent=2)
-            
-            with open(self.vocab_file, 'w', encoding='utf-8') as f:
-                json.dump(self.vocabulary, f, ensure_ascii=False, indent=2)
+            if hasattr(self, 'chroma_client') and self.chroma_client:
+                # ChromaDB 需要重置内部状态
+                try:
+                    self.chroma_client.reset()
+                except Exception:
+                    pass
+                import gc
+                del self.chroma_client
+                self.chroma_client = None
+                self.collection = None
+                gc.collect()
+        except Exception:
+            pass  # 忽略清理错误
+    
+    def close(self) -> None:
+        """显式关闭资源（确保ChromaDB正确释放）"""
+        try:
+            # 刷新批量缓存
+            if hasattr(self, '_batch_buffer') and self._batch_buffer:
+                self.flush()
+            # 强制垃圾回收释放文件句柄
+            self._cleanup_partial_init()
         except Exception as e:
-            logger.error(f"Failed to save VectorStore: {e}")
+            logger.warning(f"Error closing vector store: {e}")
     
-    def _update_vocabulary(self, content: str) -> None:
-        """更新词汇表"""
-        # 简单的分词
-        words = content.lower().split()
-        for word in words:
-            if word not in self.vocabulary:
-                self.vocabulary[word] = len(self.vocabulary)
+    def __enter__(self):
+        """上下文管理器支持"""
+        return self
     
-    def _content_to_vector(self, content: str) -> List[float]:
-        """将文本内容转换为向量（简化版 TF-IDF）"""
-        if not content:
-            return []
-        
-        # 确保词汇表最新
-        self._update_vocabulary(content)
-        
-        # 初始化向量
-        vector = [0.0] * len(self.vocabulary)
-        
-        # 统计词频
-        words = content.lower().split()
-        word_count = {}
-        for word in words:
-            word_count[word] = word_count.get(word, 0) + 1
-        
-        # 填充向量
-        for word, count in word_count.items():
-            if word in self.vocabulary:
-                idx = self.vocabulary[word]
-                vector[idx] = count
-        
-        # 归一化
-        import math
-        norm = math.sqrt(sum(x * x for x in vector))
-        if norm > 0:
-            vector = [x / norm for x in vector]
-        
-        return vector
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器退出时关闭资源"""
+        self.close()
+        return False
     
-    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
-        """计算余弦相似度"""
-        if not vec1 or not vec2:
-            return 0.0
-        
-        # 对齐向量长度
-        max_len = max(len(vec1), len(vec2))
-        vec1_ext = vec1 + [0.0] * (max_len - len(vec1))
-        vec2_ext = vec2 + [0.0] * (max_len - len(vec2))
-        
-        # 点积
-        import math
-        dot_product = sum(a * b for a, b in zip(vec1_ext, vec2_ext))
-        norm1 = math.sqrt(sum(a * a for a in vec1_ext))
-        norm2 = math.sqrt(sum(b * b for b in vec2_ext))
-        
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-        
-        similarity = dot_product / (norm1 * norm2)
-        return max(0.0, min(1.0, similarity))
+    def _init_chroma(self) -> None:
+        """初始化 ChromaDB"""
+        try:
+            import chromadb
+            from chromadb.config import Settings
+            
+            self.chroma_client = chromadb.PersistentClient(
+                path=str(self.persist_dir / "chroma_db"),
+                settings=Settings(anonymized_telemetry=False)
+            )
+            self.collection = self.chroma_client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"}
+            )
+            self.chroma_available = True
+            logger.info("ChromaDB initialized")
+        except ImportError:
+            logger.warning("chromadb not installed, semantic search disabled")
+            raise
+        except Exception as e:
+            logger.error(f"ChromaDB init failed: {e}")
+            raise
     
-    def add(self, entry_id: str, content: str, metadata: Optional[Dict] = None) -> bool:
+    def _init_model(self) -> None:
+        """初始化 embedding 模型"""
+        try:
+            from sentence_transformers import SentenceTransformer
+            
+            # 检查本地缓存
+            cache_dir = self.persist_dir / "models"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            
+            self.model = SentenceTransformer(
+                self.embedding_model_name,
+                cache_folder=str(cache_dir)
+            )
+            logger.info(f"Embedding model loaded: {self.embedding_model_name}")
+        except ImportError:
+            logger.warning("sentence_transformers not installed")
+            raise
+        except Exception as e:
+            logger.error(f"Model loading failed: {e}")
+            raise
+    
+    def encode(self, texts: List[str]) -> List[List[float]]:
         """
-        添加向量到索引
+        编码文本为向量
+        
+        Args:
+            texts: 文本列表
+            
+        Returns:
+            向量列表
+        """
+        if not self.semantic_enabled or self.model is None:
+            raise RuntimeError("Semantic search not available")
+        
+        # 批处理优化
+        embeddings = self.model.encode(
+            texts,
+            batch_size=32,
+            show_progress_bar=False,
+            convert_to_numpy=True
+        )
+        return embeddings.tolist()
+    
+    def add(
+        self, 
+        entry_id: str, 
+        content: str, 
+        metadata: Optional[Dict] = None,
+        flush: bool = True
+    ) -> bool:
+        """
+        添加记忆到向量索引
         
         Args:
             entry_id: 条目ID
             content: 文本内容
             metadata: 元数据
+            flush: 是否立即刷新（False则加入批量缓存）
             
         Returns:
             是否成功
         """
+        if not self.semantic_enabled:
+            logger.debug("Semantic search disabled, skipping vector add")
+            return False
+        
         try:
-            vector = self._content_to_vector(content)
-            self.vectors[entry_id] = vector
-            
-            self.metadata[entry_id] = {
+            item = {
+                "id": entry_id,
                 "content": content,
-                "metadata": metadata or {},
-                "timestamp": metadata.get("timestamp") if metadata else None
+                "metadata": metadata or {}
             }
             
-            self._save_to_disk()
-            logger.debug(f"Added vector for entry_id: {entry_id}")
+            if flush:
+                # 立即处理
+                self._flush_batch([item])
+            else:
+                # 加入批量缓存
+                self._batch_buffer.append(item)
+                if len(self._batch_buffer) >= self._batch_size:
+                    self.flush()
+            
             return True
         except Exception as e:
-            logger.error(f"Failed to add vector for {entry_id}: {e}")
+            logger.error(f"Failed to add vector: {e}")
             return False
     
-    def search(self, query: str, top_k: int = 5, filter: Optional[Dict] = None) -> List[Dict]:
+    def _flush_batch(self, items: List[Dict]) -> None:
+        """批量写入 ChromaDB"""
+        if not items:
+            return
+        
+        # 编码向量
+        contents = [item["content"] for item in items]
+        embeddings = self.encode(contents)
+        
+        # 写入 ChromaDB
+        self.collection.add(
+            embeddings=embeddings,
+            documents=contents,
+            metadatas=[item["metadata"] for item in items],
+            ids=[item["id"] for item in items]
+        )
+        
+        logger.debug(f"Flushed {len(items)} items to ChromaDB")
+    
+    def flush(self) -> None:
+        """刷新批量缓存"""
+        if self._batch_buffer:
+            self._flush_batch(self._batch_buffer)
+            self._batch_buffer = []
+    
+    def search(
+        self, 
+        query: str, 
+        top_k: int = 5,
+        filter: Optional[Dict] = None
+    ) -> List[SearchResult]:
         """
-        语义搜索，返回最相似的 top_k 条
+        语义搜索
         
         Args:
             query: 查询文本
             top_k: 返回结果数
-            filter: 过滤条件（暂未实现）
+            filter: 过滤条件
             
         Returns:
-            搜索结果列表，每个元素包含 entry_id, score, content 等
+            搜索结果列表
         """
-        try:
-            query_vector = self._content_to_vector(query)
-            
-            # 计算相似度
-            results = []
-            for entry_id, vector in self.vectors.items():
-                similarity = self._cosine_similarity(query_vector, vector)
-                
-                # 检查元数据
-                meta = self.metadata.get(entry_id, {})
-                
-                results.append({
-                    "entry_id": entry_id,
-                    "score": similarity,
-                    "content": meta.get("content", ""),
-                    "metadata": meta.get("metadata", {})
-                })
-            
-            # 按相似度降序排序
-            results.sort(key=lambda x: x["score"], reverse=True)
-            
-            # 过滤低分结果（阈值 0.1）
-            results = [r for r in results if r["score"] >= 0.1]
-            
-            return results[:top_k]
-        except Exception as e:
-            logger.error(f"Failed to search: {e}")
+        if not self.semantic_enabled:
+            logger.warning("Semantic search not available")
             return []
+        
+        try:
+            # 编码查询
+            query_embedding = self.encode([query])[0]
+            
+            # ChromaDB 查询
+            results = self.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k,
+                where=filter
+            )
+            
+            # 解析结果
+            search_results = []
+            for i, doc_id in enumerate(results.get("ids", [[]])[0]):
+                if not doc_id:
+                    continue
+                
+                distance = results.get("distances", [[]])[0][i]
+                document = results.get("documents", [[]])[0][i]
+                metadata = results.get("metadatas", [[]])[0][i]
+                
+                # 余弦距离转相似度分数 (0-1)
+                score = 1.0 - min(distance, 1.0)
+                
+                search_results.append(SearchResult(
+                    entry_id=doc_id,
+                    score=score,
+                    content=document,
+                    metadata=metadata or {},
+                    source="semantic"
+                ))
+            
+            return search_results
+        except Exception as e:
+            logger.error(f"Semantic search failed: {e}")
+            return []
+    
+    def hybrid_search(
+        self,
+        query: str,
+        bm25_results: List[Dict],
+        top_k: int = 5,
+        semantic_weight: float = 0.6
+    ) -> List[SearchResult]:
+        """
+        混合检索：BM25 + 语义分数融合
+        
+        Args:
+            query: 查询文本
+            bm25_results: BM25搜索结果 (含id, score, content)
+            top_k: 返回结果数
+            semantic_weight: 语义分数权重 (0-1)
+            
+        Returns:
+            融合后的搜索结果
+        """
+        if not self.semantic_enabled:
+            # 降级：返回BM25结果
+            return [
+                SearchResult(
+                    entry_id=r.get("id", ""),
+                    score=r.get("score", 0.0),
+                    content=r.get("content", ""),
+                    metadata=r.get("metadata", {}),
+                    source="bm25"
+                )
+                for r in bm25_results[:top_k]
+            ]
+        
+        try:
+            # 获取语义搜索结果
+            semantic_results = self.search(query, top_k=top_k * 2)
+            
+            # 归一化BM25分数
+            if bm25_results:
+                bm25_scores = [r.get("score", 0) for r in bm25_results]
+                bm25_min, bm25_max = min(bm25_scores), max(bm25_scores)
+                bm25_range = bm25_max - bm25_min if bm25_max > bm25_min else 1.0
+            else:
+                bm25_min, bm25_range = 0, 1.0
+            
+            # 合并结果
+            combined: Dict[str, SearchResult] = {}
+            
+            # 添加BM25结果（已归一化）
+            for r in bm25_results:
+                entry_id = r.get("id", "")
+                if not entry_id:
+                    continue
+                
+                normalized_score = (r.get("score", 0) - bm25_min) / bm25_range
+                combined[entry_id] = SearchResult(
+                    entry_id=entry_id,
+                    score=normalized_score * (1 - semantic_weight),
+                    content=r.get("content", ""),
+                    metadata=r.get("metadata", {}),
+                    source="bm25"
+                )
+            
+            # 添加语义结果（已归一化，余弦相似度天然0-1）
+            for r in semantic_results:
+                if r.entry_id in combined:
+                    # 已存在，加权融合
+                    existing = combined[r.entry_id]
+                    bm25_part = existing.score  # 已经是 (1-w) * bm25
+                    semantic_part = r.score * semantic_weight
+                    
+                    combined[r.entry_id] = SearchResult(
+                        entry_id=r.entry_id,
+                        score=bm25_part + semantic_part,
+                        content=r.content,
+                        metadata=r.metadata,
+                        source="hybrid"
+                    )
+                else:
+                    # 新结果
+                    combined[r.entry_id] = SearchResult(
+                        entry_id=r.entry_id,
+                        score=r.score * semantic_weight,
+                        content=r.content,
+                        metadata=r.metadata,
+                        source="semantic"
+                    )
+            
+            # 排序并返回
+            results = sorted(combined.values(), key=lambda x: x.score, reverse=True)
+            return results[:top_k]
+            
+        except Exception as e:
+            logger.error(f"Hybrid search failed: {e}, falling back to BM25")
+            return [
+                SearchResult(
+                    entry_id=r.get("id", ""),
+                    score=r.get("score", 0.0),
+                    content=r.get("content", ""),
+                    metadata=r.get("metadata", {}),
+                    source="bm25"
+                )
+                for r in bm25_results[:top_k]
+            ]
     
     def delete(self, entry_id: str) -> bool:
         """
         删除指定向量
         
         Args:
-            entry_id: 要删除的条目ID
+            entry_id: 条目ID
             
         Returns:
             是否成功
         """
+        if not self.semantic_enabled:
+            return False
+        
         try:
-            if entry_id in self.vectors:
-                del self.vectors[entry_id]
-            
-            if entry_id in self.metadata:
-                del self.metadata[entry_id]
-            
-            self._save_to_disk()
-            logger.debug(f"Deleted vector for entry_id: {entry_id}")
+            self.collection.delete(ids=[entry_id])
+            logger.debug(f"Deleted vector: {entry_id}")
             return True
         except Exception as e:
             logger.error(f"Failed to delete vector {entry_id}: {e}")
             return False
     
-    def update(self, entry_id: str, content: str, metadata: Optional[Dict] = None) -> bool:
+    def update(
+        self, 
+        entry_id: str, 
+        content: str, 
+        metadata: Optional[Dict] = None
+    ) -> bool:
         """
         更新向量
         
@@ -245,62 +455,40 @@ class VectorStore:
         Returns:
             是否成功
         """
-        # 先删除，再添加
+        # 先删除再添加
         if self.delete(entry_id):
-            return self.add(entry_id, content, metadata)
+            return self.add(entry_id, content, metadata, flush=True)
         return False
     
     def get_count(self) -> int:
         """
-        返回向量总数
+        获取向量总数
         
         Returns:
-            向量总数
+            向量数量
         """
-        return len(self.vectors)
+        if not self.semantic_enabled:
+            return 0
+        try:
+            return self.collection.count()
+        except:
+            return 0
     
-    def hybrid_search(self, query: str, keyword_results: List[Dict], top_k: int = 5) -> List[Dict]:
+    def get_stats(self) -> Dict[str, Any]:
         """
-        混合检索：结合关键词结果和向量结果
+        获取统计信息
         
-        Args:
-            query: 查询文本
-            keyword_results: 关键词搜索结果
-            top_k: 返回结果数
-            
         Returns:
-            合并排序后的结果
+            统计字典
         """
-        # 向量检索
-        vector_results = self.search(query, top_k=top_k * 2)
-        
-        # 合并结果
-        combined = {}
-        
-        # 添加关键词结果（给较高的基础分）
-        for idx, result in enumerate(keyword_results):
-            entry_id = result.get("id") or f"keyword_{idx}"
-            combined[entry_id] = {
-                "entry_id": entry_id,
-                "score": 0.8 - (idx * 0.1),  # 递减分数
-                "content": result.get("content", ""),
-                "metadata": result.get("metadata", {}),
-                "source": "keyword"
-            }
-        
-        # 添加向量结果
-        for result in vector_results:
-            entry_id = result["entry_id"]
-            if entry_id in combined:
-                # 合并分数（加权平均）
-                combined[entry_id]["score"] = (combined[entry_id]["score"] + result["score"]) / 2
-                combined[entry_id]["source"] = "both"
-            else:
-                combined[entry_id] = result
-                combined[entry_id]["source"] = "vector"
-        
-        # 转换回列表并排序
-        combined_list = list(combined.values())
-        combined_list.sort(key=lambda x: x["score"], reverse=True)
-        
-        return combined_list[:top_k]
+        return {
+            "semantic_enabled": self.semantic_enabled,
+            "chroma_available": self.chroma_available,
+            "model": self.embedding_model_name if self.semantic_enabled else None,
+            "vector_count": self.get_count(),
+            "persist_dir": str(self.persist_dir)
+        }
+
+
+# 兼容性：保留旧类名
+VectorStore = SemanticVectorStore

@@ -109,18 +109,18 @@ class SaveSuggestion:
 
 # 每条规则: (pattern, category, destination, confidence_boost, reason, tags)
 _LTM_RULES: list[tuple[str, str, float, str, list[str]]] = [
-    # 偏好类 — 中文不需要 \s+，直接跟随内容
-    # P0 修复：添加否定词排除，防止 "我不喜欢" 被误判为 "我喜欢"
-    (r"(?<!不)(我比较喜欢|我很喜欢|我喜欢|我爱|我偏好|我倾向).{2,}",
-     "preference", 0.85, "检测到用户偏好表达", ["偏好"]),
-    # P0 修复：添加否定词排除，防止 "don't like" 被误判为 "like"
-    # 使用固定宽度后向引用（不支持变宽，所以拆分为两个模式）
-    (r"(?<!don't\s)(?<!dont\s)(?<!not\s)(I\s+(like|prefer|love|enjoy))\s+.{4,}",
-     "preference", 0.85, "检测到用户偏好表达（英文）", ["偏好"]),
-    (r"(不喜欢|讨厌|我不想|我不喜欢).{2,}",
+    # 偏好类 — 中文
+    # v2.0 修复：使用更智能的否定检测，避免正则误判
+    # 策略：使用两个正则，一个检测正向，一个检测负向
+    (r"(不喜欢|讨厌|我不想|我不喜欢|不太喜欢|有点不喜欢|我不太喜欢|我有点不喜欢|我不是很喜欢).{2,}",
      "preference", 0.80, "检测到用户负向偏好", ["偏好", "负向"]),
-    (r"(hate|don'?t\s+like|dislike)\s+.{4,}",
+    (r"(我比较喜欢|我很喜欢|我喜欢|我爱|我偏好|我倾向).{2,}",
+     "preference", 0.85, "检测到用户正向偏好表达", ["偏好", "正向"]),
+    # 英文偏好类
+    (r"(hate|don'?t\s+like|dislike|do not like|not\s+(like|prefer|love|enjoy))\s+.{4,}",
      "preference", 0.80, "检测到用户负向偏好（英文）", ["偏好", "负向"]),
+    (r"(I\s+(like|prefer|love|enjoy))\s+.{4,}",
+     "preference", 0.85, "检测到用户正向偏好表达（英文）", ["偏好", "正向"]),
     # 目标类
     (r"(我的目标|我想要|我计划|我打算|我希望|我要).{3,}",
      "goal", 0.82, "检测到用户目标/计划", ["目标"]),
@@ -131,7 +131,7 @@ _LTM_RULES: list[tuple[str, str, float, str, list[str]]] = [
      "profile", 0.90, "检测到用户身份信息", ["个人信息"]),
     (r"(I'm|I am|My name is)\s+[A-Za-z\u4e00-\u9fff]{2,}",
      "profile", 0.90, "检测到用户身份信息（英文）", ["个人信息"]),
-    (r"(我住在|我在|我来自|我工作在).{3,}",
+    (r"(我住在|我在|我来自|我工作在).{2,}",
      "profile", 0.85, "检测到用户地理/工作信息", ["个人信息"]),
     (r"(I live in|I'm from|I work at)\s+.{3,}",
      "profile", 0.85, "检测到用户地理/工作信息（英文）", ["个人信息"]),
@@ -210,7 +210,9 @@ class TriggerEngine:
 
         for event in events:
             content = str(event.get("content", "")).strip()
-            if not content or len(content) < 8:
+            # P0-4 修复：降低最小长度限制，支持中文短句
+            # 中文每个字符都有意义，6个字符的"我喜欢吃苹果"应该被识别
+            if not content or len(content) < 6:
                 continue
 
             # Only analyze user-typed content
@@ -225,6 +227,12 @@ class TriggerEngine:
             for pattern, category, conf, reason, tags in self._ltm_patterns:
                 m = pattern.search(analysis_content)
                 if m:
+                    # v2.0 修复：对于偏好类规则，进行二次验证
+                    if category == "preference" and "正向" in tags:
+                        if not _is_positive_preference(analysis_content, m):
+                            # 不是真正的正向偏好，跳过
+                            continue
+                    
                     snippet = _extract_snippet(analysis_content, m)
                     key = snippet[:60].lower()
                     if key in seen_snippets:
@@ -276,6 +284,55 @@ class TriggerEngine:
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _is_positive_preference(text: str, match: re.Match) -> bool:
+    """
+    检查是否是真正的正向偏好，而不是否定表达。
+    避免"我不喜欢"被误判为"我喜欢"。
+    
+    v2.1 修复：扩大否定词检测范围，支持更多否定形式。
+    """
+    # 获取匹配位置前的上下文（最多15个字符）
+    context_start = max(0, match.start() - 15)
+    prefix_context = text[context_start:match.start()].lower()
+    match_text = match.group(0).lower()
+    
+    # 组合前缀和匹配文本进行检测
+    full_context = prefix_context + match_text
+    
+    # 中文否定词检测（扩展列表）
+    chinese_negatives = [
+        "不", "不是", "不太", "有点不", "不是很", "并不",
+        "没", "没有", "不太", "不怎么", "不怎么太",
+        "绝不", "从不", "并非", "不太是",
+        "并不是", "并不是很", "并不是特别",
+    ]
+    for neg in chinese_negatives:
+        if neg in full_context[:20]:  # 检查前20个字符
+            return False
+    
+    # 英文否定词检测（扩展列表）
+    english_negatives = [
+        "don't", "dont", "not", "do not", "doesn't", "doesnt",
+        "didn't", "didnt", "won't", "wont", "wouldn't", "wouldnt",
+        "never", "rarely", "hardly", "barely", "scarcely",
+        "hate", "dislike", "avoid", "reject",
+    ]
+    full_lower = full_context.lower()
+    for neg in english_negatives:
+        if f" {neg} " in f" {full_lower} " or full_lower.startswith(f"{neg} "):
+            return False
+    
+    # 特殊模式检测："我不太喜欢" / "我不是很喜欢"
+    negative_patterns = [
+        r"我(不|不是|不太|不是很|并不).{0,5}(喜欢|爱|偏好|倾向)",
+        r"i\s+(don'?t|do\s+not|won'?t|wouldn'?t).{0,10}(like|love|prefer|enjoy)",
+    ]
+    for pattern in negative_patterns:
+        if re.search(pattern, full_context, re.IGNORECASE):
+            return False
+    
+    return True
 
 def _extract_snippet(content: str, match: re.Match) -> str:
     """

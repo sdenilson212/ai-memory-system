@@ -1,0 +1,359 @@
+{
+  "benchmark": "AI Memory System Benchmark v1",
+  "generated_at": "2026-04-08T06:21:50+08:00",
+  "overall_status": "needs_attention",
+  "key_findings": [
+    "Correctness scope locked to pure AI Memory System: 68/68",
+    "Retrieval seeded benchmark hit@k=1.0, MRR=1.0",
+    "Integrity concurrent write checks: FAIL",
+    "Known limitation remains: vector search is still TF-IDF placeholder, not embedding-grade semantic retrieval."
+  ],
+  "layers": {
+    "correctness": {
+      "scope": {
+        "target_system": "AI Memory System (pure scope)",
+        "included": [
+          "engine/verify.py",
+          "engine/verify_fix.py",
+          "engine/verify_mcp_tools.py",
+          "run_full_test.py"
+        ],
+        "excluded": [
+          "tests/test_adaptive_skill_system.py",
+          "any adaptive-skill-system related tests"
+        ]
+      },
+      "score": {
+        "observed": 68,
+        "expected": 68
+      },
+      "checks": [
+        {
+          "name": "engine.verify",
+          "description": "核心引擎 smoke：LTM / KB / STM / 安全模块",
+          "script": "C:\\Users\\sdenilson\\WorkBuddy\\Claw\\output\\ai-memory-system\\engine\\verify.py",
+          "cwd": "C:\\Users\\sdenilson\\WorkBuddy\\Claw\\output\\ai-memory-system\\engine",
+          "token": "[OK]",
+          "expected_passes": 18,
+          "observed_passes": 18,
+          "returncode": 0,
+          "elapsed_ms": 1771.35,
+          "passed": true,
+          "output_excerpt": "=== AI Memory Engine - Verification ===\n[OK] All modules imported\n[OK] SensitiveDetector: API key detection\n[OK] SensitiveDetector: safe text passes\n[OK] Encryptor: encrypt/decrypt roundtrip\n[OK] Encryptor: list_keys does not expose ciphertext\n[OK] Encryptor: delete works\n[OK] LTMManager: save\n[OK] LTMManager: get\n[OK] LTMManager: search\n[OK] LTMManager: load_profile\n[OK] KBManager: add\n[OK] KBManager: search\n[OK] KBManager: get_index (no content leak)\n[OK] KBManager: import_text (1 chunks)\n[OK] STMManager: start_session\n[OK] STMManager: update_context\n[OK] STMManager: queue_save + get_pending_saves\n[OK] STMManager: end_session clears memory\n\n========================================\nALL TESTS PASSED - Engine is ready!\n========================================"
+        },
+        {
+          "name": "engine.verify_fix",
+          "description": "历史修复点复核：分片 / filelock / passphrase / trigger / vector_store 声明",
+          "script": "C:\\Users\\sdenilson\\WorkBuddy\\Claw\\output\\ai-memory-system\\engine\\verify_fix.py",
+          "cwd": "C:\\Users\\sdenilson\\WorkBuddy\\Claw\\output\\ai-memory-system\\engine",
+          "token": "[PASS]",
+          "expected_passes": 8,
+          "observed_passes": 8,
+          "returncode": 0,
+          "elapsed_ms": 703.84,
+          "passed": true,
+          "output_excerpt": "====== 5个问题复核结果 ======\n  [PASS] 问题1 文件分片: 分片文件: ['long-term-memory-decision.md', 'long-term-memory-other.md', 'long-term-memory-preference.md', 'long-term-memory-project.md']\n  [PASS] 问题3 并发安全/filelock: filelock 可用: True\n  [PASS] 问题1 分片写入/读取: preference 分片条目数: 6\n  [PASS] 问题4 passphrase 环境变量: 读取结果: PASS\n  [PASS] 问题4 passphrase 显式优先: 显式传入优先: PASS\n  [PASS] 问题2 trigger文档: 置信度阈值: 0.7\n  [PASS] 问题5 向量搜索评估: 当前为TF-IDF占位实现，非真实embedding，已明确记录为已知限制\n  [PASS] 问题3 requirements.txt: filelock 依赖: 已添加\n============================\n总结: 全部通过"
+        },
+        {
+          "name": "engine.verify_mcp_tools",
+          "description": "MCP 21+ 工具链端到端验证",
+          "script": "C:\\Users\\sdenilson\\WorkBuddy\\Claw\\output\\ai-memory-system\\engine\\verify_mcp_tools.py",
+          "cwd": "C:\\Users\\sdenilson\\WorkBuddy\\Claw\\output\\ai-memory-system\\engine",
+          "token": "[PASS]",
+          "expected_passes": 22,
+          "observed_passes": 22,
+          "returncode": 0,
+          "elapsed_ms": 2663.96,
+          "passed": true,
+          "output_excerpt": "[PASS] memory_save: basic\n[PASS] memory_recall: keyword search\n[PASS] memory_get: by ID\n[PASS] memory_update: change tags\n[PASS] memory_profile\n[PASS] memory_list\n[PASS] memory_delete: no-confirm raises error\n[PASS] memory_delete: confirmed\n[PASS] kb_add\n[PASS] kb_search\n[PASS] kb_index\n[PASS] kb_import\n[PASS] kb_update\n[PASS] kb_delete: confirmed\n[PASS] session_start\n[PASS] session_update\n[PASS] session_event\n[PASS] session_queue\n[PASS] session_pending\n[PASS] session_end\n[PASS] memory_status\n[PASS] trigger_analyze: text\n\nALL 22 MCP TOOL TESTS PASSED"
+        },
+        {
+          "name": "run_full_test",
+          "description": "REST API 全链路验证（启动服务 -> 调接口 -> 清理）",
+          "script": "C:\\Users\\sdenilson\\WorkBuddy\\Claw\\output\\ai-memory-system\\run_full_test.py",
+          "cwd": "C:\\Users\\sdenilson\\WorkBuddy\\Claw\\output\\ai-memory-system",
+          "token": "[PASS]",
+          "expected_passes": 20,
+          "observed_passes": 20,
+          "returncode": 0,
+          "elapsed_ms": 2435.66,
+          "passed": true,
+          "output_excerpt": "Waiting for server...\nServer is up at http://127.0.0.1:8765\n\n\n  [PASS] GET /health\n  [PASS] POST /memory/save\n  [PASS] GET /memory/recall\n  [PASS] GET /memory/{id}\n  [PASS] GET /memory/profile\n  [PASS] GET /memory/list\n  [PASS] GET /health (system check)\n  [PASS] POST /kb/add\n  [PASS] GET /kb/search\n  [PASS] GET /kb/index\n  [PASS] POST /kb/import\n  [PASS] POST /session/start\n  [PASS] POST /session/{id}/context\n  [PASS] POST /session/{id}/event\n  [PASS] POST /session/{id}/queue\n  [PASS] GET /session/{id}/pending\n  [PASS] GET /session/{id}/suggestions\n  [PASS] POST /session/analyze\n  [PASS] GET /session/{id}/status\n  [PASS] POST /session/{id}/end\n\nALL 20 API TESTS PASSED"
+        }
+      ],
+      "passed": true
+    },
+    "retrieval_quality": {
+      "dataset": "seeded-synthetic-v1",
+      "notes": [
+        "这是首版种子集 benchmark，不代表真实线上分布。",
+        "目标是把 correctness 之外的 retrieval 能力显式量化。",
+        "案例刻意覆盖英文、中文、全角字符、accent folding。"
+      ],
+      "aggregates": {
+        "ltm": {
+          "case_count": 5,
+          "hit_rate": 1.0,
+          "avg_precision_at_k": 0.4,
+          "avg_recall_at_k": 1.0,
+          "mrr": 1.0
+        },
+        "kb": {
+          "case_count": 5,
+          "hit_rate": 1.0,
+          "avg_precision_at_k": 0.3333,
+          "avg_recall_at_k": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "overall": {
+        "case_count": 10,
+        "hit_rate": 1.0,
+        "avg_precision_at_k": 0.3666,
+        "avg_recall_at_k": 1.0,
+        "mrr": 1.0
+      },
+      "cases": {
+        "ltm": [
+          {
+            "name": "ltm-dark-mode-keyword",
+            "k": 3,
+            "query": "dark mode",
+            "expected_ids": [
+              "960a2103-faa5-4fe9-8e18-43e50dc5e089"
+            ],
+            "found_ids": [
+              "960a2103-faa5-4fe9-8e18-43e50dc5e089"
+            ],
+            "hit_at_k": 1,
+            "precision_at_k": 0.3333,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "first_relevant_rank": 1
+          },
+          {
+            "name": "ltm-python-backend",
+            "k": 3,
+            "query": "Python backend",
+            "expected_ids": [
+              "c9be6839-093e-4fa2-927f-43e3a26992ce"
+            ],
+            "found_ids": [
+              "c9be6839-093e-4fa2-927f-43e3a26992ce",
+              "780ab00e-deb0-4b7f-a804-8b97f3dbbbef"
+            ],
+            "hit_at_k": 1,
+            "precision_at_k": 0.3333,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "first_relevant_rank": 1
+          },
+          {
+            "name": "ltm-shanghai-half-marathon",
+            "k": 3,
+            "query": "上海 半马",
+            "expected_ids": [
+              "3c11e091-e080-44e2-bc3d-fd27b0d222ec"
+            ],
+            "found_ids": [
+              "3c11e091-e080-44e2-bc3d-fd27b0d222ec"
+            ],
+            "hit_at_k": 1,
+            "precision_at_k": 0.3333,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "first_relevant_rank": 1
+          },
+          {
+            "name": "ltm-accent-folding-cafe",
+            "k": 3,
+            "query": "cafe brainstorming",
+            "expected_ids": [
+              "d5aff047-dcf6-4f0f-be4d-8c57c852a058"
+            ],
+            "found_ids": [
+              "d5aff047-dcf6-4f0f-be4d-8c57c852a058"
+            ],
+            "hit_at_k": 1,
+            "precision_at_k": 0.3333,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "first_relevant_rank": 1
+          },
+          {
+            "name": "ltm-fullwidth-python",
+            "k": 3,
+            "query": "Ｐｙｔｈｏｎ",
+            "expected_ids": [
+              "c9be6839-093e-4fa2-927f-43e3a26992ce",
+              "780ab00e-deb0-4b7f-a804-8b97f3dbbbef"
+            ],
+            "found_ids": [
+              "c9be6839-093e-4fa2-927f-43e3a26992ce",
+              "780ab00e-deb0-4b7f-a804-8b97f3dbbbef"
+            ],
+            "hit_at_k": 1,
+            "precision_at_k": 0.6667,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "first_relevant_rank": 1
+          }
+        ],
+        "kb": [
+          {
+            "name": "kb-fastapi-di",
+            "k": 3,
+            "query": "fastapi dependency injection",
+            "expected_ids": [
+              "8a5e3269-0da7-454e-ae69-24dd3ee57b75"
+            ],
+            "found_ids": [
+              "8a5e3269-0da7-454e-ae69-24dd3ee57b75"
+            ],
+            "hit_at_k": 1,
+            "precision_at_k": 0.3333,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "first_relevant_rank": 1
+          },
+          {
+            "name": "kb-rag-hybrid-retrieval",
+            "k": 3,
+            "query": "BM25 向量 检索",
+            "expected_ids": [
+              "f11ff245-4268-4145-aa86-65053843682e"
+            ],
+            "found_ids": [
+              "f11ff245-4268-4145-aa86-65053843682e"
+            ],
+            "hit_at_k": 1,
+            "precision_at_k": 0.3333,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "first_relevant_rank": 1
+          },
+          {
+            "name": "kb-wechat-map",
+            "k": 3,
+            "query": "微信 地图 定位",
+            "expected_ids": [
+              "2cafdc42-7f43-479a-bfc2-c078002b6044"
+            ],
+            "found_ids": [
+              "2cafdc42-7f43-479a-bfc2-c078002b6044"
+            ],
+            "hit_at_k": 1,
+            "precision_at_k": 0.3333,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "first_relevant_rank": 1
+          },
+          {
+            "name": "kb-resume-accent-query",
+            "k": 3,
+            "query": "résumé impact",
+            "expected_ids": [
+              "977ed076-2f57-45a5-a35b-68bbac856dcf"
+            ],
+            "found_ids": [
+              "977ed076-2f57-45a5-a35b-68bbac856dcf"
+            ],
+            "hit_at_k": 1,
+            "precision_at_k": 0.3333,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "first_relevant_rank": 1
+          },
+          {
+            "name": "kb-unicode-cafe",
+            "k": 3,
+            "query": "café fullwidth normalize",
+            "expected_ids": [
+              "384fda9d-bf41-4a26-9b27-7a529e27463b"
+            ],
+            "found_ids": [
+              "384fda9d-bf41-4a26-9b27-7a529e27463b"
+            ],
+            "hit_at_k": 1,
+            "precision_at_k": 0.3333,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "first_relevant_rank": 1
+          }
+        ]
+      }
+    },
+    "performance_integrity": {
+      "performance": {
+        "ltm_save": {
+          "count": 25,
+          "mean_ms": 15.559,
+          "p50_ms": 15.74,
+          "p95_ms": 17.751,
+          "max_ms": 19.056
+        },
+        "ltm_get": {
+          "count": 60,
+          "mean_ms": 16.255,
+          "p50_ms": 16.048,
+          "p95_ms": 20.745,
+          "max_ms": 31.773
+        },
+        "ltm_search": {
+          "count": 60,
+          "mean_ms": 22.118,
+          "p50_ms": 21.426,
+          "p95_ms": 26.54,
+          "max_ms": 32.068
+        },
+        "kb_add": {
+          "count": 25,
+          "mean_ms": 40.116,
+          "p50_ms": 39.621,
+          "p95_ms": 45.362,
+          "max_ms": 49.663
+        },
+        "kb_search": {
+          "count": 60,
+          "mean_ms": 19.992,
+          "p50_ms": 19.8,
+          "p95_ms": 24.4,
+          "max_ms": 32.407
+        },
+        "kb_index": {
+          "count": 30,
+          "mean_ms": 10.945,
+          "p50_ms": 10.566,
+          "p95_ms": 13.395,
+          "max_ms": 18.748
+        }
+      },
+      "integrity": {
+        "concurrent_write_count": 32,
+        "elapsed_ms": 569.256,
+        "unique_ids_written": 32,
+        "entries_loaded_from_shard": 10,
+        "search_hits_after_restart": 10,
+        "checks": [
+          {
+            "name": "all_ids_unique",
+            "passed": true
+          },
+          {
+            "name": "all_entries_persisted_in_shard",
+            "passed": false
+          },
+          {
+            "name": "entries_searchable_after_restart",
+            "passed": false
+          }
+        ],
+        "passed": false
+      },
+      "notes": [
+        "performance 目前仅记录本机观测值，不作为 release gate。",
+        "integrity 关注 filelock 场景下的并发写入与重启后可读性。"
+      ]
+    }
+  }
+}

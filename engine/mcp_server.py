@@ -65,7 +65,8 @@ if str(_HERE) not in sys.path:
 
 # ── Engine imports ──────────────────────────────────────────────────────────────
 from config import MEMORY_DIR, SECURE_DIR
-from core.ltm import LTMManager, LTMError
+from core.ltm import LTMError                        # 仅导入错误类
+from core.ltm_wal import LTMManagerWAL as LTMManager # v1.5.0: WAL 替换原始 LTMManager
 from core.kb import KBManager, KBError
 from core.stm import STMManager, STMError
 from core.trigger import TriggerEngine
@@ -714,7 +715,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
         return _ok({
             "system":         "ai-memory-system",
-            "version":        "1.0.0",
+            "version":        "1.6.0",
             "memory_dir":     str(MEMORY_DIR),
             "ltm": {
                 "total_entries":     len(ltm_entries),
