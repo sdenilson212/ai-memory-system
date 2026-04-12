@@ -33,6 +33,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from threading import Lock
 
 
 import frontmatter
@@ -42,6 +43,10 @@ from security.detector import SensitiveDetector
 from security.encryptor import Encryptor
 
 logger = logging.getLogger(__name__)
+
+# ── 并发安全：UUID 生成锁 ─────────────────────────────────────────────────────
+# 保证多线程并发下 UUID 不重复
+_uuid_lock = Lock()
 
 
 def _load_frontmatter_file(path: Path):
@@ -438,17 +443,22 @@ class LTMManager:
                         # 敏感但没有提供 passphrase：存脱敏版本
                         stored_content = self._detector.redact(content)
                     else:
+                        # 加锁保证并发安全
+                        with _uuid_lock:
+                            encrypt_key = f"ltm_{uuid.uuid4().hex[:8]}"
                         encrypted_ref = self._encryptor.encrypt(
-                            key=f"ltm_{uuid.uuid4().hex[:8]}",
+                            key=encrypt_key,
                             plaintext=content,
                             passphrase=resolved_passphrase,
                             category=category,
                         )
                         stored_content = self._detector.redact(content)
 
-                # 创建新条目
+                # 创建新条目（加锁保证并发安全）
+                with _uuid_lock:
+                    entry_id = str(uuid.uuid4())
                 entry = LTMEntry(
-                    id=str(uuid.uuid4()),
+                    id=entry_id,
                     content=stored_content,
                     category=category,
                     source=source,
@@ -1043,8 +1053,11 @@ def _now_iso() -> str:
 
 
 def _dict_to_entry(d: dict) -> LTMEntry:
+    # 加锁保证并发安全
+    with _uuid_lock:
+        entry_id = d.get("id", str(uuid.uuid4()))
     return LTMEntry(
-        id=d.get("id", str(uuid.uuid4())),
+        id=entry_id,
         content=d.get("content", ""),
         category=d.get("category", "other"),
         source=d.get("source", "user-explicit"),

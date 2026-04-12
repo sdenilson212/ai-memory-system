@@ -37,6 +37,7 @@ from core.ltm import (
     _FileLock, _FILELOCK_AVAILABLE, _NullLock,
     _load_frontmatter_file, frontmatter,
     Encryptor, SensitiveDetector,
+    _uuid_lock,
 )
 
 logger = logging.getLogger(__name__)
@@ -228,18 +229,23 @@ class LTMManagerWAL:
             if not resolved_passphrase:
                 stored_content = self._detector.redact(content)
             else:
-                encrypted_ref = self._encryptor.encrypt(
-                    key=f"ltm_{uuid.uuid4().hex[:8]}",
-                    plaintext=content,
+            # 加锁保证并发安全
+            with _uuid_lock:
+                encrypt_key = f"ltm_{uuid.uuid4().hex[:8]}"
+            encrypted_ref = self._encryptor.encrypt(
+                key=encrypt_key,
+                plaintext=content,
                     passphrase=resolved_passphrase,
                     category=category,
                 )
                 stored_content = self._detector.redact(content)
         
-        # 3. 创建新条目
+        # 3. 创建新条目（加锁保证并发安全）
         from core.ltm import LTMEntry as OriginalLTMEntry
+        with _uuid_lock:
+            entry_id = str(uuid.uuid4())
         entry = OriginalLTMEntry(
-            id=str(uuid.uuid4()),
+            id=entry_id,
             content=stored_content,
             category=category,
             source=source,
@@ -863,8 +869,11 @@ def _dict_to_entry(d: dict) -> LTMEntry:
     import uuid
     from core.ltm import LTMEntry as OriginalLTMEntry, _now_iso as ltm_now_iso
     
+    # 加锁保证并发安全
+    with _uuid_lock:
+        entry_id = d.get("id", str(uuid.uuid4()))
     return OriginalLTMEntry(
-        id=d.get("id", str(uuid.uuid4())),
+        id=entry_id,
         content=d.get("content", ""),
         category=d.get("category", "other"),
         source=d.get("source", "user-explicit"),
